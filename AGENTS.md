@@ -27,20 +27,28 @@ The CLI is a single-binary TypeScript ESM project (Node.js ≥ 18).
 ```
 src/
   index.ts                        # CLI entry — Commander, 3-phase async pipeline
+  index.test.ts                   # CLI integration tests (--help, --help-json)
   version-map.ts                  # Pure resolution logic, no I/O
   version-map.test.ts             # Unit tests for resolution logic
-  npm-fetcher.ts                  # npm registry fetch
-  changelog-fetcher.ts            # Best-effort live page fetch
+  npm-fetcher.ts                  # npm registry fetch + Angular version from peerDependencies
+  schemas.ts                      # Zod schemas for all external API / HTML responses
+  schemas.test.ts                 # Unit tests for schemas
   reporter.ts                     # Output formatting (pretty / json / markdown)
   data/
     breaking-changes.ts           # Type definitions only — no hardcoded data
   fetchers/
     github-skills-fetcher.ts      # All dynamic data fetching from GitHub skills repo
+    angular-changelog-fetcher.ts  # Breaking changes from Angular GitHub releases API
+    angular-changelog-fetcher.test.ts
+    c8y-changelog-fetcher.ts      # Live Cumulocity changelog page scraper (unused in main pipeline)
+    c8y-changelog-fetcher.test.ts
 ```
 
 **No hardcoded breaking-change data.** Everything is fetched at runtime from:
-- `https://raw.githubusercontent.com/Cumulocity-IoT/cumulocity-skills/main/skills/`
-- `https://registry.npmjs.org/@c8y/ngx-components`
+- `https://raw.githubusercontent.com/Cumulocity-IoT/cumulocity-skills/main/skills/` (WebSDK changelog, REST API changelog, version map, upgrade skill guides)
+- `https://registry.npmjs.org/@c8y/ngx-components` (latest patch versions, CD release, Angular major version via peerDependencies)
+- `https://api.github.com/repos/angular/angular/releases/tags/{N}.0.0` (Angular release notes — fetched when the traversal crosses Angular major versions)
+- `https://cumulocity.com/docs/{year}/change-logs/` (live Cumulocity changelog — scraped by `c8y-changelog-fetcher.ts`, not yet wired into the main pipeline)
 
 ---
 
@@ -85,7 +93,7 @@ All such data must be fetched and parsed from the upstream sources above.
 
 ## GitHub Actions workflow
 
-`.github/workflows/check-breaking-changes.yml` is designed to be **copied** into
+`sample/check-breaking-changes.yml` is designed to be **copied** into
 consumer repositories. It reads `@c8y/ngx-components` from the consumer's
 `package.json` as the `--from` version and uses
 `Cumulocity-IoT/plugins-e2e-setup/collect-shell-versions@main` to determine
