@@ -36,7 +36,9 @@ jobs:
         run: pnpm build
 
       - name: Pack tarball
-        run: pnpm pack --out c8y-breaking-changes-cli-${{ github.ref_name }}.tgz
+        run: |
+          pnpm pack
+          mv *.tgz c8y-breaking-changes-cli-${{ github.ref_name }}.tgz
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
