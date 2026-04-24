@@ -13,7 +13,26 @@ export interface NpmVersionInfo {
   distTags: Record<string, string>;
   /** Latest version for each LTS line (key = "1021.22", value = "1021.22.145") */
   ltsPatchVersions: Record<string, string>;
+  /** Angular major version for each SDK stable line, derived from peerDependencies */
+  angularVersions: Record<string, number>;
 }
+
+/**
+ * Extract the Angular major version from an npm peerDependency range string.
+ *
+ * Handles ranges like `^16.2.11`, `>=18.0.0 <19.0.0`, `~20.0.0`, `18.x`, etc.
+ * The first integer in the string is always the Angular major.
+ *
+ * Exported for unit testing.
+ */
+export function extractAngularMajorFromRange(range: string): number | null {
+  const match = range.match(/\d+/);
+  if (!match) return null;
+  const major = parseInt(match[0], 10);
+  return major >= 2 ? major : null; // Angular 2+ only
+}
+
+import { NpmDistTagsSchema, NpmPackageManifestSchema } from './schemas.js';
 
 const NPM_REGISTRY = 'https://registry.npmjs.org';
 const PRIMARY_PACKAGE = '@c8y/ngx-components';
@@ -32,6 +51,7 @@ export async function fetchNpmVersionInfo(stableLines: string[]): Promise<NpmVer
     latest: null,
     distTags: {},
     ltsPatchVersions: {},
+    angularVersions: {},
   };
 
   try {
@@ -45,10 +65,15 @@ export async function fetchNpmVersionInfo(stableLines: string[]): Promise<NpmVer
       return result;
     }
 
-    const data = (await res.json()) as {
-      'dist-tags': Record<string, string>;
-      versions?: Record<string, unknown>;
-    };
+    const parsed = NpmPackageManifestSchema.safeParse(await res.json());
+    if (!parsed.success) {
+      process.stderr.write(
+        `\n[warning] npm registry response for ${PRIMARY_PACKAGE} has unexpected shape — ` +
+          `version info and Angular detection may be incomplete.\n  ${parsed.error.message}\n`,
+      );
+      return result;
+    }
+    const data = parsed.data;
 
     result.distTags = data['dist-tags'] ?? {};
     result.latest = result.distTags['latest'] ?? null;
@@ -65,7 +90,7 @@ export async function fetchNpmVersionInfo(stableLines: string[]): Promise<NpmVer
       }
     }
 
-    // Also scan all released versions for any stable lines we didn't find via tags
+    // Scan all released versions for latest patch per line and their Angular peerDep
     if (data.versions) {
       for (const version of Object.keys(data.versions)) {
         for (const line of stableLines) {
@@ -77,6 +102,16 @@ export async function fetchNpmVersionInfo(stableLines: string[]): Promise<NpmVer
           }
         }
       }
+    }
+
+    // Derive Angular major version per stable line from the latest version's peerDependencies
+    for (const line of stableLines) {
+      const latestPatch = result.ltsPatchVersions[line];
+      if (!latestPatch) continue;
+      const range = data.versions?.[latestPatch]?.peerDependencies?.['@angular/core'];
+      if (!range) continue;
+      const major = extractAngularMajorFromRange(range);
+      if (major !== null) result.angularVersions[line] = major;
     }
   } catch {
     // Network unreachable — return empty result
@@ -99,8 +134,9 @@ export async function fetchLatestCdVersion(): Promise<string | null> {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as { 'dist-tags'?: Record<string, string> };
-    return data['dist-tags']?.['latest'] ?? null;
+    const parsed = NpmDistTagsSchema.safeParse(await res.json());
+    if (!parsed.success) return null;
+    return parsed.data['dist-tags']?.['latest'] ?? null;
   } catch {
     return null;
   }

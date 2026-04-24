@@ -131,7 +131,7 @@ function parseVersionData(versionMapMd: string, websdkChangelogMd: string): SdkV
       r['To Version']?.trim().replace('.x', '') === stablePrefix,
     );
     const upgradeSkillName =
-      upgradeRow?.['Skill to Use']?.trim() ?? `websdk-${stablePrefix}-upgrade`;
+      (upgradeRow?.['Skill to Use']?.trim() ?? `websdk-${stablePrefix}-upgrade`).replace(/`/g, '');
 
     versions.push({
       ltsAlias,
