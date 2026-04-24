@@ -93,7 +93,7 @@ All such data must be fetched and parsed from the upstream sources above.
 
 ## GitHub Actions workflow
 
-`.github/workflows/check-breaking-changes.yml` is designed to be **copied** into
+`sample/check-breaking-changes.yml` is designed to be **copied** into
 consumer repositories. It reads `@c8y/ngx-components` from the consumer's
 `package.json` as the `--from` version and uses
 `Cumulocity-IoT/plugins-e2e-setup/collect-shell-versions@main` to determine

@@ -115,7 +115,7 @@ c8y-breaking-changes --help-json | jq '.commands[0].options[].flags'
 
 ## GitHub Actions
 
-A ready-made workflow is included at [`.github/workflows/check-breaking-changes.yml`](.github/workflows/check-breaking-changes.yml).
+A ready-made workflow is included at [`sample/check-breaking-changes.yml`](sample/check-breaking-changes.yml).
 
 Copy it to your WebSDK plugin or application repository. It:
 
@@ -167,9 +167,8 @@ src/
     angular-changelog-fetcher.test.ts
     c8y-changelog-fetcher.ts            # Live Cumulocity changelog scraper (not yet in main pipeline)
     c8y-changelog-fetcher.test.ts
-.github/
-  workflows/
-    check-breaking-changes.yml          # GitHub Actions workflow
+sample/
+  check-breaking-changes.yml            # Ready-made GitHub Actions workflow to copy into consumer repos
 ```
 
 ### Data sources
