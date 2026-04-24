@@ -1,10 +1,11 @@
 /**
  * SDK version model and resolution logic.
  *
- * Version data is fetched at runtime from:
- *   https://github.com/Cumulocity-IoT/cumulocity-skills/blob/main/skills/websdk-version-map/SKILL.md
+ * Version data is derived at runtime from npm dist-tags on @c8y/ngx-components.
+ * Tags like y2026-lts resolve to a full semver from which the stable line and
+ * Angular version (via peerDependencies) are derived.
  *
- * See src/fetchers/github-skills-fetcher.ts for how versions are populated.
+ * See src/npm-fetcher.ts for how versions are populated.
  */
 
 export interface SdkVersion {
@@ -22,8 +23,6 @@ export interface SdkVersion {
   supportStatus: string;
   /** WebSDK changelog URL for this release year */
   changelogUrl: string;
-  /** Name of the upgrade skill for this version, e.g. "websdk-1023-upgrade" */
-  upgradeSkillName: string;
 }
 
 /**

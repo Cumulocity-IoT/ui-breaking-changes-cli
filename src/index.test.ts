@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -101,5 +101,98 @@ describe('check --help', () => {
   it('--help-json is not shown (hidden flag)', () => {
     const { stdout } = runCli(['check', '--help']);
     assert.ok(!stdout.includes('--help-json'), '--help-json should be hidden from help output');
+  });
+});
+
+// ── versions --help ───────────────────────────────────────────────────────────
+
+describe('versions --help', () => {
+  it('exits 0', () => {
+    const { status } = runCli(['versions', '--help']);
+    assert.equal(status, 0);
+  });
+
+  it('output includes versions subcommand description', () => {
+    const { stdout } = runCli(['versions', '--help']);
+    assert.ok(stdout.toLowerCase().includes('version'), 'versions description not in help output');
+  });
+});
+
+// ── Missing required options ──────────────────────────────────────────────────
+
+describe('check: missing required options', () => {
+  it('exits non-zero when --from is missing', () => {
+    const { status } = runCli(['check', '--to', '2026-lts']);
+    assert.notEqual(status, 0);
+  });
+
+  it('exits non-zero when --to is missing', () => {
+    const { status } = runCli(['check', '--from', '2025-lts']);
+    assert.notEqual(status, 0);
+  });
+
+  it('exits non-zero when both --from and --to are missing', () => {
+    const { status } = runCli(['check']);
+    assert.notEqual(status, 0);
+  });
+
+  it('error output mentions the missing option when --from is absent', () => {
+    const { stderr } = runCli(['check', '--to', '2026-lts']);
+    assert.ok(stderr.includes('--from') || stderr.includes('from'), `expected --from in stderr: ${stderr}`);
+  });
+
+  it('error output mentions the missing option when --to is absent', () => {
+    const { stderr } = runCli(['check', '--from', '2025-lts']);
+    assert.ok(stderr.includes('--to') || stderr.includes('to'), `expected --to in stderr: ${stderr}`);
+  });
+});
+
+// ── Invalid --format value ────────────────────────────────────────────────────
+
+describe('check: invalid --format', () => {
+  it('exits non-zero for unknown format', () => {
+    const { status } = runCli(['check', '--from', '2025-lts', '--to', '2026-lts', '--format', 'xml']);
+    assert.notEqual(status, 0);
+  });
+
+  it('error output mentions the invalid value or the allowed choices', () => {
+    const { stderr } = runCli(['check', '--from', '2025-lts', '--to', '2026-lts', '--format', 'xml']);
+    const combined = stderr.toLowerCase();
+    assert.ok(
+      combined.includes('xml') || combined.includes('format') || combined.includes('pretty') || combined.includes('json'),
+      `expected format error hint in stderr: ${stderr}`,
+    );
+  });
+});
+
+// ── --help-json schema completeness ──────────────────────────────────────────
+
+describe('--help-json: check command option completeness', () => {
+  let flags: string[];
+
+  before(() => {
+    const { stdout } = runCli(['--help-json']);
+    const schema = JSON.parse(stdout) as { commands: Array<{ name: string; options?: Array<{ flags: string }> }> };
+    const check = schema.commands.find((c) => c.name === 'check');
+    assert.ok(check, 'check command missing from schema');
+    flags = (check.options ?? []).map((o) => o.flags);
+  });
+
+  for (const expected of ['--format', '--breaking-only', '--category', '--show-grep', '--no-npm', '--no-color']) {
+    it(`schema includes ${expected}`, () => {
+      assert.ok(flags.some((f) => f.includes(expected)), `${expected} not found in check options: ${JSON.stringify(flags)}`);
+    });
+  }
+
+  it('--format lists all three valid choices', () => {
+    const schema = JSON.parse(runCli(['--help-json']).stdout) as {
+      commands: Array<{ name: string; options?: Array<{ flags: string; choices?: string[] }> }>;
+    };
+    const check = schema.commands.find((c) => c.name === 'check')!;
+    const formatOpt = (check.options ?? []).find((o) => o.flags.includes('--format'));
+    assert.ok(formatOpt, '--format option not found');
+    assert.ok(formatOpt.choices?.includes('pretty'),   '"pretty" not in --format choices');
+    assert.ok(formatOpt.choices?.includes('json'),     '"json" not in --format choices');
+    assert.ok(formatOpt.choices?.includes('markdown'), '"markdown" not in --format choices');
   });
 });

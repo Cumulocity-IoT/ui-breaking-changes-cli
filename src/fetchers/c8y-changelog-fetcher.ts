@@ -11,6 +11,7 @@
  */
 
 import { C8yChangelogEntrySchema, type C8yChangelogEntry } from '../schemas.js';
+export type { C8yChangelogEntry };
 
 const BASE_DOCS_URL = 'https://cumulocity.com/docs';
 
@@ -28,6 +29,30 @@ export async function fetchC8yChangelog(
   components: string[],
 ): Promise<C8yChangelogEntry[]> {
   const url = `${BASE_DOCS_URL}/${year}/change-logs/`;
+  return fetchChangelogUrl(url, changeTypes, components);
+}
+
+/**
+ * Fetch the global (non-year-scoped) Cumulocity changelog page.
+ * Used for REST API changes which appear at `cumulocity.com/docs/change-logs/`
+ * rather than a year-specific sub-path.
+ *
+ * @param changeTypes Change-type slugs to include, e.g. `['api-change']`.
+ * @param components  Component slugs to include, e.g. `['rest-api']`.
+ */
+export async function fetchC8yChangelogGlobal(
+  changeTypes: string[],
+  components: string[],
+): Promise<C8yChangelogEntry[]> {
+  const url = `${BASE_DOCS_URL}/change-logs/`;
+  return fetchChangelogUrl(url, changeTypes, components);
+}
+
+async function fetchChangelogUrl(
+  url: string,
+  changeTypes: string[],
+  components: string[],
+): Promise<C8yChangelogEntry[]> {
 
   let html: string;
   try {

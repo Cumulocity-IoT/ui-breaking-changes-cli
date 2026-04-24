@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import type { SdkVersion } from './version-map.js';
-import type { BreakingChange, Category, VersionMigration } from './data/breaking-changes.js';
+import type { BreakingChange, Category } from './data/breaking-changes.js';
 import type { NpmVersionInfo } from './npm-fetcher.js';
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,6 @@ export interface ReportOptions {
   /** All versions traversed (from exclusive, to inclusive) */
   traversedVersions: SdkVersion[];
   breakingChanges: BreakingChange[];
-  migrationPlan: VersionMigration[];
   npmInfo: NpmVersionInfo;
   /** When true, print the grep hints */
   showGrepHints: boolean;
@@ -51,7 +50,7 @@ export function printReport(opts: ReportOptions): void {
 // ---------------------------------------------------------------------------
 
 function printPretty(opts: ReportOptions): void {
-  const { fromVersion, toVersion, traversedVersions, breakingChanges, migrationPlan, npmInfo } = opts;
+  const { fromVersion, toVersion, traversedVersions, breakingChanges, npmInfo } = opts;
 
   console.log('');
   console.log(
@@ -122,36 +121,6 @@ function printPretty(opts: ReportOptions): void {
     console.log('');
   }
 
-  // ── Migration plan ─────────────────────────────────────────────────────────
-  if (migrationPlan.length > 0) {
-    console.log(chalk.bold('  📋  Step-by-step Migration Checklist'));
-    console.log(chalk.dim('  ' + '─'.repeat(62)));
-
-    let globalStep = 0;
-    for (const migration of migrationPlan) {
-      console.log('');
-      console.log(
-        chalk.bold.blue(`  ${migration.fromLine} → ${migration.toLine}`),
-      );
-      console.log(chalk.dim(`  Reference: ${migration.referenceUrl}`));
-      console.log('');
-
-      for (const step of migration.steps) {
-        globalStep++;
-        console.log(`  ${chalk.bold.white(`[${globalStep}]`)} ${step.title}`);
-        if (step.description) {
-          console.log(`      ${chalk.gray(step.description)}`);
-        }
-        if (step.commands) {
-          for (const cmd of step.commands) {
-            console.log(`      ${chalk.green('$')} ${chalk.cyan(cmd)}`);
-          }
-        }
-      }
-    }
-    console.log('');
-  }
-
   // ── Reference links ────────────────────────────────────────────────────────
   console.log(chalk.bold('  📚  Reference Links'));
   console.log(chalk.dim('  ' + '─'.repeat(62)));
@@ -163,7 +132,6 @@ function printPretty(opts: ReportOptions): void {
   }
 
   console.log(`  ${chalk.underline('https://angular.dev/update-guide')}`);
-  console.log(`  ${chalk.underline('https://github.com/Cumulocity-IoT/cumulocity-skills/tree/main/skills')}`);
   console.log('');
 
   // ── Summary counts ─────────────────────────────────────────────────────────
@@ -186,7 +154,9 @@ function printChangeItem(item: BreakingChange, opts: ReportOptions): void {
   console.log('');
   console.log(`  ${badge} ${chalk.bold(item.title)} ${versionLabel}`);
   console.log(`    ${chalk.gray(item.description)}`);
-  console.log(`    ${chalk.bold('Action:')} ${item.actionRequired}`);
+  if (item.actionRequired) {
+    console.log(`    ${chalk.bold('Action:')} ${item.actionRequired}`);
+  }
 
   if (opts.showGrepHints && item.grepHints?.length) {
     console.log(`    ${chalk.dim('Grep for:')} ${item.grepHints.map((g) => chalk.cyan(g)).join('  ')}`);
@@ -229,9 +199,6 @@ function printJson(opts: ReportOptions): void {
       ltsPatchVersions: opts.npmInfo.ltsPatchVersions,
     },
     breakingChanges: opts.breakingChanges,
-    migrationSteps: opts.migrationPlan.flatMap((m) =>
-      m.steps.map((s) => ({ ...s, migration: `${m.fromLine} → ${m.toLine}` })),
-    ),
   };
   console.log(JSON.stringify(output, null, 2));
 }
@@ -241,7 +208,7 @@ function printJson(opts: ReportOptions): void {
 // ---------------------------------------------------------------------------
 
 function printMarkdown(opts: ReportOptions): void {
-  const { fromVersion, toVersion, traversedVersions, breakingChanges, migrationPlan, npmInfo } = opts;
+  const { fromVersion, toVersion, traversedVersions, breakingChanges, npmInfo } = opts;
 
   const lines: string[] = [];
 
@@ -281,7 +248,9 @@ function printMarkdown(opts: ReportOptions): void {
       lines.push('');
       lines.push(item.description);
       lines.push('');
-      lines.push(`**Action required:** ${item.actionRequired}`);
+      if (item.actionRequired) {
+        lines.push(`**Action required:** ${item.actionRequired}`);
+      }
 
       if (opts.showGrepHints && item.grepHints?.length) {
         lines.push('');
@@ -297,44 +266,11 @@ function printMarkdown(opts: ReportOptions): void {
     }
   }
 
-  if (migrationPlan.length > 0) {
-    lines.push('## Migration Checklist');
-    lines.push('');
-
-    let globalStep = 0;
-    for (const migration of migrationPlan) {
-      lines.push(`### ${migration.fromLine} → ${migration.toLine}`);
-      lines.push('');
-      lines.push(`Reference: ${migration.referenceUrl}`);
-      lines.push('');
-
-      for (const step of migration.steps) {
-        globalStep++;
-        lines.push(`**[${globalStep}] ${step.title}**`);
-
-        if (step.description) {
-          lines.push('');
-          lines.push(step.description);
-        }
-
-        if (step.commands) {
-          lines.push('');
-          lines.push('```bash');
-          lines.push(...step.commands);
-          lines.push('```');
-        }
-
-        lines.push('');
-      }
-    }
-  }
-
   lines.push('## Reference Links');
   lines.push('');
   lines.push('- [Migration Guide](https://cumulocity.com/codex/migration-guides/updating-web-sdk-version/overview)');
   lines.push('- [REST API Changelog](https://cumulocity.com/docs/change-logs/?component=.component-rest-api&change-type=.change-type-api-change)');
   lines.push('- [Angular Update Guide](https://angular.dev/update-guide)');
-  lines.push('- [Cumulocity Skills (GitHub)](https://github.com/Cumulocity-IoT/cumulocity-skills/tree/main/skills)');
 
   for (const v of traversedVersions) {
     lines.push(`- [${v.ltsAlias} WebSDK Changelog](${v.changelogUrl})`);
