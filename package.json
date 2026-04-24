@@ -1,0 +1,29 @@
+{
+  "name": "c8y-breaking-changes-cli",
+  "version": "1.0.0",
+  "description": "CLI to detect and list breaking changes between Cumulocity Web SDK versions",
+  "type": "module",
+  "bin": {
+    "c8y-breaking-changes": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx/esm --test $(find src -name '*.test.ts')"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

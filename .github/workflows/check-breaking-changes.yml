@@ -1,0 +1,249 @@
+# Checks for Cumulocity WebSDK breaking changes between the version pinned
+# in this project and the latest cockpit release on npm.
+#
+# How it works:
+#   1. Reads @c8y/ngx-components from the project's package.json (FROM version)
+#   2. Uses Cumulocity-IoT/plugins-e2e-setup/collect-shell-versions to get the
+#      latest cockpit release version from npm dist-tags (TO version)
+#   3. Runs c8y-breaking-changes --from <pinned> --to <latest>
+#   4. Posts a summary to the GitHub step summary and, on PRs, as a PR comment
+#   5. Fails (or warns) when BREAKING-severity changes are found
+#
+# Copy this file to your WebSDK plugin / application repository.
+# No secrets are required — all data comes from the public npm registry
+# and the public Cumulocity skills GitHub repository.
+
+name: WebSDK Breaking Changes Check
+
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'pnpm-lock.yaml'
+  push:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Run daily at 06:00 UTC so you hear about platform updates overnight
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      from_version:
+        description: 'Override FROM version (default: read from package.json)'
+        required: false
+        default: ''
+      to_version:
+        description: 'Override TO version (default: latest cockpit release)'
+        required: false
+        default: ''
+      fail_on_breaking:
+        description: 'Fail the job when BREAKING changes are found'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: write   # needed for posting PR comments
+
+jobs:
+  check-breaking-changes:
+    name: WebSDK Breaking Changes
+    runs-on: ubuntu-latest
+    outputs:
+      from_version: ${{ steps.resolve-versions.outputs.from_version }}
+      to_version: ${{ steps.resolve-versions.outputs.to_version }}
+      breaking_count: ${{ steps.run-check.outputs.breaking_count }}
+      has_breaking: ${{ steps.run-check.outputs.has_breaking }}
+
+    steps:
+      # ── 1. Get the project's pinned @c8y/ngx-components version ──────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read pinned WebSDK version from package.json
+        id: pinned-version
+        run: |
+          VERSION=$(node -e "
+            const pkg = require('./package.json');
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
+            const raw = deps['@c8y/ngx-components'] || '';
+            // Strip semver range operators: ^, ~, >=, =
+            const clean = raw.replace(/^[^0-9]*/, '');
+            if (!clean) { console.error('ERROR: @c8y/ngx-components not found in package.json'); process.exit(1); }
+            process.stdout.write(clean);
+          ")
+          echo "pinned=$VERSION" >> $GITHUB_OUTPUT
+          echo "Pinned @c8y/ngx-components: $VERSION"
+
+      # ── 2. Get the latest cockpit release via collect-shell-versions ──────
+      - name: Collect latest cockpit shell version
+        id: collect-shell-versions
+        uses: Cumulocity-IoT/plugins-e2e-setup/collect-shell-versions@main
+        with:
+          include-latest: true
+          versions-length: 1
+
+      - name: Extract latest cockpit version
+        id: latest-version
+        run: |
+          # shell_versions output is a JSON array: [{"tag":"latest","version":"1023.14.x"}]
+          VERSION=$(echo '${{ steps.collect-shell-versions.outputs.shell_versions }}' \
+            | node -e "
+                const data = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+                process.stdout.write(data[0]?.version ?? '');
+              ")
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: could not parse version from collect-shell-versions output"
+            exit 1
+          fi
+          echo "latest=$VERSION" >> $GITHUB_OUTPUT
+          echo "Latest cockpit release: $VERSION"
+
+      # ── 3. Allow workflow_dispatch overrides ──────────────────────────────
+      - name: Resolve final FROM / TO versions
+        id: resolve-versions
+        run: |
+          FROM="${{ inputs.from_version || steps.pinned-version.outputs.pinned }}"
+          TO="${{ inputs.to_version || steps.latest-version.outputs.latest }}"
+          echo "from_version=$FROM" >> $GITHUB_OUTPUT
+          echo "to_version=$TO"     >> $GITHUB_OUTPUT
+          echo "FROM: $FROM   TO: $TO"
+
+      # ── 4. Install + run the breaking-changes CLI ─────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install c8y-breaking-changes-cli
+        # Use a local path when this workflow lives inside the CLI repo itself;
+        # replace with the published package name once published to npm:
+        #   run: npm install -g c8y-breaking-changes-cli
+        run: npm install -g .
+
+      - name: Run breaking-changes check (JSON)
+        id: run-check
+        run: |
+          FROM="${{ steps.resolve-versions.outputs.from_version }}"
+          TO="${{ steps.resolve-versions.outputs.to_version }}"
+
+          echo "Checking breaking changes: $FROM → $TO"
+
+          # Run with JSON output so we can parse counts and gate the build
+          RESULT=$(c8y-breaking-changes --from "$FROM" --to "$TO" --format json 2>/dev/null || true)
+
+          if [ -z "$RESULT" ] || echo "$RESULT" | grep -q '"breakingChanges":\s*\[\]'; then
+            BREAKING_COUNT=0
+          else
+            BREAKING_COUNT=$(echo "$RESULT" | node -e "
+              const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              const n = (d.breakingChanges || []).filter(c => c.severity === 'BREAKING').length;
+              process.stdout.write(String(n));
+            ")
+          fi
+
+          echo "breaking_count=$BREAKING_COUNT" >> $GITHUB_OUTPUT
+          echo "has_breaking=$([ $BREAKING_COUNT -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "result<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULT"     >> $GITHUB_OUTPUT
+          echo "EOF"         >> $GITHUB_OUTPUT
+
+          echo "BREAKING changes found: $BREAKING_COUNT"
+
+      # ── 5. Generate human-readable report for GitHub Step Summary ─────────
+      - name: Generate markdown report
+        id: markdown-report
+        run: |
+          FROM="${{ steps.resolve-versions.outputs.from_version }}"
+          TO="${{ steps.resolve-versions.outputs.to_version }}"
+
+          # Pretty-print to a temp file (colours disabled for markdown)
+          c8y-breaking-changes --from "$FROM" --to "$TO" \
+            --format markdown \
+            2>/dev/null > /tmp/breaking-changes-report.md || true
+
+          # Write to GitHub Step Summary
+          echo "## WebSDK Breaking Changes: \`$FROM\` → \`$TO\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          COUNT="${{ steps.run-check.outputs.breaking_count }}"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
+            echo "> **$COUNT BREAKING change(s) detected** between \`$FROM\` and \`$TO\`." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+            echo "> No BREAKING changes detected between \`$FROM\` and \`$TO\`." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat /tmp/breaking-changes-report.md >> $GITHUB_STEP_SUMMARY
+
+      # ── 6. Post PR comment ─────────────────────────────────────────────────
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const from = '${{ steps.resolve-versions.outputs.from_version }}';
+            const to   = '${{ steps.resolve-versions.outputs.to_version }}';
+            const count = Number('${{ steps.run-check.outputs.breaking_count }}');
+            const report = fs.readFileSync('/tmp/breaking-changes-report.md', 'utf8');
+
+            const header = count > 0
+              ? `## ⚠️ WebSDK Breaking Changes: \`${from}\` → \`${to}\`\n\n**${count} BREAKING change(s) detected.**`
+              : `## ✅ WebSDK Breaking Changes: \`${from}\` → \`${to}\`\n\nNo breaking changes detected.`;
+
+            const body = [
+              header,
+              '',
+              '<details><summary>Full report</summary>',
+              '',
+              report,
+              '',
+              '</details>',
+              '',
+              `_Generated by [c8y-breaking-changes-cli](https://github.com/${{ github.repository }})_`,
+            ].join('\n');
+
+            // Find and update existing bot comment, or create a new one
+            const marker = '<!-- c8y-breaking-changes-bot -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            const commentBody = `${marker}\n${body}`;
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: commentBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: commentBody,
+              });
+            }
+
+      # ── 7. Fail the job if BREAKING changes are found (configurable) ──────
+      - name: Fail if breaking changes detected
+        if: |
+          steps.run-check.outputs.has_breaking == 'true' &&
+          (github.event_name != 'workflow_dispatch' || inputs.fail_on_breaking == 'true')
+        run: |
+          echo "::error::${{ steps.run-check.outputs.breaking_count }} BREAKING WebSDK change(s) found between ${{ steps.resolve-versions.outputs.from_version }} and ${{ steps.resolve-versions.outputs.to_version }}. Check the job summary for details."
+          exit 1
