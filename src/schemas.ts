@@ -41,6 +41,12 @@ export const NpmPackageManifestSchema = z.object({
   'dist-tags': z.record(z.string(), z.string()),
   /** Per-version metadata map; may be omitted in abbreviated responses */
   versions: z.record(z.string(), NpmVersionMetaSchema).optional(),
+  /**
+   * ISO 8601 publish timestamps per version, e.g. `{ "1023.14.0": "2026-01-15T10:00:00.000Z" }`.
+   * Also contains `"created"` and `"modified"` keys (non-version strings); these are filtered
+   * out in the npm-fetcher when looking up release dates for stable lines.
+   */
+  time: z.record(z.string(), z.string()).optional(),
 });
 
 export type NpmPackageManifest = z.infer<typeof NpmPackageManifestSchema>;
@@ -59,6 +65,26 @@ export type NpmDistTags = z.infer<typeof NpmDistTagsSchema>;
 // regressions if the page HTML structure changes and our regex starts producing
 // empty / malformed data.
 
+/**
+ * Validates the raw HTML of a Cumulocity changelog page.
+ *
+ * Checks for the structural markers we depend on before attempting to parse:
+ *  - At least one `<section` tag with a `page-section` class
+ *  - At least one date signal: either a `data-date` attribute or an `<h5>` element
+ *    (the global `/docs/change-logs/` page uses `<h5>` headers; year pages use `data-date`)
+ *
+ * If either check fails the caller should emit a warning and return an empty array
+ * rather than proceeding with a likely-broken parse.
+ */
+export const ChangelogHtmlSchema = z
+  .string()
+  .refine((html) => /class="[^"]*page-section/.test(html), {
+    message: 'No <section class="...page-section..."> found — page structure may have changed',
+  })
+  .refine((html) => /data-date="|<h5[\s>]/.test(html), {
+    message: 'No date signals (data-date attribute or <h5> header) found — page structure may have changed',
+  });
+
 /** Raw data extracted from one <section> block before further processing. */
 export const C8yChangelogEntrySchema = z.object({
   /** Section anchor id, e.g. "ui-c8y-1021-0-0-dashboard-manager-as-separate-plugin" */
@@ -75,6 +101,13 @@ export const C8yChangelogEntrySchema = z.object({
   description: z.string(),
   /** Canonical URL of the source page with fragment appended */
   url: z.string().url(),
+  /**
+   * Version string from the `<button data-tag="technicalcomponent-ui-c8y">` metadata button,
+   * e.g. "1021.0.0". Present only for Web SDK entries that carry this metadata.
+   * When present, used as an additional range filter: the entry is included only when
+   * uiVersion is strictly greater than fromVersion and at most toVersion.
+   */
+  uiVersion: z.string().optional(),
 });
 
 export type C8yChangelogEntry = z.infer<typeof C8yChangelogEntrySchema>;

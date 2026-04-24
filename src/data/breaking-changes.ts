@@ -5,15 +5,15 @@
  *  - https://cumulocity.com/docs/{year}/change-logs/ (WebSDK changes)
  *  - https://cumulocity.com/docs/change-logs/        (REST API changes)
  *
- * See src/fetchers/github-skills-fetcher.ts for the fetch + parse logic.
+ * See src/fetchers/c8y-changelog-fetcher.ts for the fetch + parse logic.
  */
 
 export type Severity = 'BREAKING' | 'NOTABLE' | 'INFO';
 export type Category = 'angular' | 'websdk-ui' | 'rest-api' | 'migration' | 'security';
 
 export interface BreakingChange {
-  /** LTS alias this change was introduced in */
-  introducedIn: string;
+  /** LTS alias this change was introduced in; absent for REST API entries */
+  introducedIn?: string;
   severity: Severity;
   category: Category;
   title: string;
@@ -23,4 +23,6 @@ export interface BreakingChange {
   /** Optional grep hints for finding affected code */
   grepHints?: string[];
   sourceUrl?: string;
+  /** Version string from the technicalcomponent-ui-c8y button, e.g. "1023.0.0" */
+  uiVersion?: string;
 }

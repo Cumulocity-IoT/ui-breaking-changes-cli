@@ -162,7 +162,6 @@ src/
   data/
     breaking-changes.ts                 # Type definitions only (no hardcoded data)
   fetchers/
-    github-skills-fetcher.ts            # Orchestrates WebSDK and REST API changelog scraping from cumulocity.com
     angular-changelog-fetcher.ts        # Breaking changes from Angular GitHub releases API
     angular-changelog-fetcher.test.ts
     c8y-changelog-fetcher.ts            # Live Cumulocity changelog scraper (cumulocity.com/docs)
@@ -175,9 +174,8 @@ sample/
 
 | Source | What it provides |
 |---|---|
-| `registry.npmjs.org/@c8y/ngx-components` | Version map (from `y????-lts` dist-tags), latest patch versions, Angular version via `peerDependencies` |
-| `cumulocity.com/docs/{year}/change-logs/` | WebSDK breaking changes and announcements per release year |
-| `cumulocity.com/docs/change-logs/` | REST API breaking changes (global, all years) |
+| `registry.npmjs.org/@c8y/ngx-components` | Version map (from `y????-lts` dist-tags), latest patch versions, Angular version via `peerDependencies`, per-version publish timestamps (`time` field) |
+| `cumulocity.com/docs/change-logs/` | Both WebSDK (`component-web-sdk`) and REST API (`component-rest-api`) changes — a single request to the global aggregated page covers both |
 | `api.github.com/repos/angular/angular` | Angular release notes — fetched per major version crossed during an upgrade |
 
 ---
@@ -198,10 +196,16 @@ Future LTS lines (e.g. `y2027-lts`) appear automatically as soon as the tag exis
 
 ### 2. WebSDK / Angular breaking changes
 
-**Source:** `https://cumulocity.com/docs/{year}/change-logs/`  
-**Equivalent filters:** `?component=.component-web-sdk&change-type=.change-type-announcement` and `?component=.component-web-sdk&change-type=.change-type-api-change`
+**Source:** `https://cumulocity.com/docs/change-logs/` (single global request for both WebSDK and REST API)
+**Equivalent filters:** `?component=.component-web-sdk&change-type=.change-type-announcement`, `?component=.component-web-sdk&change-type=.change-type-api-change`
 
-One request per year in the traversal range. The CLI fetches the full Hugo-rendered page (all entries are present in the HTML regardless of query parameters) and filters `<section>` blocks by their CSS classes: `component-web-sdk` combined with `change-type-announcement` or `change-type-api-change`. Each entry is classified by severity and category:
+A single request to the global aggregated changelog page is made — the same URL used for REST API changes. The CLI filters `<section>` blocks by CSS class: `component-web-sdk` combined with `change-type-announcement` or `change-type-api-change`. Date-based filtering (entry date vs. npm release dates of `fromVersion`/`toVersion`) is applied the same way as for REST API entries.
+
+When present, each WebSDK entry may carry a `uiVersion` parsed from the `data-tag="technicalcomponent-ui-c8y"` metadata button (e.g. `1023.0.0`). This acts as an additional semver range filter:
+- **Major-only** (`1023.0.0`): included when the major matches anywhere in the upgrade range.
+- **Exact version** (`1022.8.3`): included only when strictly after `--from` and at most `--to`.
+
+Each entry is classified by severity and category:
 
 | Category | Detection rule |
 |---|---|
@@ -225,11 +229,16 @@ Angular releases use a consistent `## Breaking Changes\n### package\n- bullet` f
 
 ### 3. REST API breaking changes
 
-**Source:** `https://cumulocity.com/docs/change-logs/` (global, no year filter)  
+**Source:** `https://cumulocity.com/docs/change-logs/` (single global request)  
 **Equivalent filter:** `?component=.component-rest-api&change-type=.change-type-api-change`
 
-The CLI fetches the global changelog page and filters `<section>` blocks by `component-rest-api` and `change-type-api-change`. Entries are included when they have a parseable date and a non-empty description.
+REST API changes are fetched from the **global** aggregated changelog page rather than year-specific sub-paths. This ensures completeness — entries published during a continuous delivery (CD) window between two LTS releases appear on the global page regardless of which year they were posted under.
 
-Each entry is attributed to an LTS alias dynamically: the entry is mapped to the most recent LTS year that is ≤ the entry's publication year. No years are hardcoded — works automatically as new LTS versions are added. Entries outside the traversal range are discarded.
+Entries are attributed using **npm publish dates** rather than calendar year:
 
-Severity is derived from the entry content: titles starting with `Planned:` become `INFO`; entries that add or broaden data (e.g. "now includes", "becomes case-insensitive") become `NOTABLE`; everything else is `BREAKING`.
+1. The npm registry `time` field records the exact UTC timestamp when each version was published.
+2. Each REST API entry has a publish date (from the `data-date` attribute, or falling back to the preceding `<h5>Month DD, YYYY</h5>` section header on the global page).
+3. Only entries whose date falls **strictly after** `fromVersion`'s npm release date and **on or before** `toVersion`'s npm release date are included.
+4. Each included entry is attributed to the first LTS version whose npm release date is ≥ the entry's publish date — i.e. the LTS that first *ships* the change.
+
+This correctly captures CD-era changes. For example, a REST API change published in September 2025 (after 2025-lts was released in early 2025, but before 2026-lts in early 2026) is attributed to **2026-lts** and appears in a `--from 2025-lts --to 2026-lts` report.

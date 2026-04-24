@@ -37,18 +37,16 @@ src/
   data/
     breaking-changes.ts           # Type definitions only — no hardcoded data
   fetchers/
-    github-skills-fetcher.ts      # All dynamic data fetching from GitHub skills repo
     angular-changelog-fetcher.ts  # Breaking changes from Angular GitHub releases API
     angular-changelog-fetcher.test.ts
-    c8y-changelog-fetcher.ts      # Live Cumulocity changelog page scraper (unused in main pipeline)
+    c8y-changelog-fetcher.ts      # Live Cumulocity changelog scraper — WebSDK + REST API changes + orchestration
     c8y-changelog-fetcher.test.ts
 ```
 
 **No hardcoded breaking-change data.** Everything is fetched at runtime from:
-- `https://raw.githubusercontent.com/Cumulocity-IoT/cumulocity-skills/main/skills/` (WebSDK changelog, REST API changelog, version map, upgrade skill guides)
 - `https://registry.npmjs.org/@c8y/ngx-components` (latest patch versions, CD release, Angular major version via peerDependencies)
+- `https://cumulocity.com/docs/change-logs/` (both WebSDK **and** REST API changes — single global page for both)
 - `https://api.github.com/repos/angular/angular/releases/tags/{N}.0.0` (Angular release notes — fetched when the traversal crosses Angular major versions)
-- `https://cumulocity.com/docs/{year}/change-logs/` (live Cumulocity changelog — scraped by `c8y-changelog-fetcher.ts`, not yet wired into the main pipeline)
 
 ---
 
@@ -98,6 +96,32 @@ consumer repositories. It reads `@c8y/ngx-components` from the consumer's
 `package.json` as the `--from` version and uses
 `Cumulocity-IoT/plugins-e2e-setup/collect-shell-versions@main` to determine
 the `--to` version.
+
+---
+
+## BreakingChange fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `introducedIn` | `string?` | LTS alias; **absent** for REST API entries (stripped before output); used internally for sorting only |
+| `severity` | `'BREAKING' \| 'NOTABLE' \| 'INFO'` | — |
+| `category` | `Category` | — |
+| `title` | `string` | — |
+| `description` | `string` | — |
+| `uiVersion` | `string?` | Semver parsed from `data-tag="technicalcomponent-ui-c8y"` button in the HTML; present on WebSDK entries; used as additional range filter and shown in reporter output |
+| `sourceUrl` | `string?` | — |
+| `grepHints` | `string[]?` | — |
+
+---
+
+## uiVersion range filter
+
+When a WebSDK entry carries a `uiVersion`, `convertEntry` applies an extra filter on top of the date check:
+
+- **Major-only** (e.g. `1023.0.0`, where minor and patch are both 0): the entry is included when `uiMajor` falls within `[fromMajor, toMajor]` — meaning "this change applies to any 1023.x upgrade".
+- **Exact version** (e.g. `1022.8.3`): included only when `uiVersion` is strictly after `fromVersion` and at most `toVersion` (mirrors the date-filter semantics).
+
+REST API entries never have a `uiVersion`.
 
 ---
 

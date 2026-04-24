@@ -16,10 +16,11 @@
  */
 
 import { Command, Option } from 'commander';
-import { resolveVersion, getVersionRange } from './version-map.js';
-import { fetchChangelogs } from './fetchers/github-skills-fetcher.js';
+import { writeSync } from 'node:fs';
+import { getVersionRange } from './version-map.js';
+import { fetchChangelogs } from './fetchers/c8y-changelog-fetcher.js';
 import { fetchAngularBreakingChanges } from './fetchers/angular-changelog-fetcher.js';
-import { fetchNpmDerivedData, fetchLatestCdVersion, type NpmVersionInfo } from './npm-fetcher.js';
+import { fetchNpmDerivedData, fetchLatestCdVersion, resolveArbitraryVersion, type NpmVersionInfo } from './npm-fetcher.js';
 import { printReport } from './reporter.js';
 import type { SdkVersion } from './version-map.js';
 
@@ -30,6 +31,7 @@ const VERSION_ALIAS_FORMATS = [
   { format: 'Year alias',          pattern: '<year> or y<year>',        examples: ['2025', 'y2026'] },
   { format: 'Minor / stable line', pattern: '<major> or <major>.<min>', examples: ['1021', '1021.22'] },
   { format: 'Full patch version',  pattern: '<major>.<min>.<patch>',    examples: ['1021.22.145', '1023.13.2'] },
+  { format: 'Range selector',      pattern: '<prefix>@oldest|<prefix>@latest', examples: ['1021@oldest', '1021@latest', '1021.22@latest'], note: 'Picks the first or last published patch within the given major (or major.minor) prefix. Required for partial version inputs.' },
   { format: 'CD release',          pattern: 'cd',                       examples: ['cd'], note: 'Resolves to the current latest dist-tag on npm (@c8y/ngx-components)' },
 ] as const;
 
@@ -92,8 +94,11 @@ program
       'Version alias formats:\n' +
       '  2025-lts          LTS alias\n' +
       '  2025, y2025       Year alias (y-prefix optional)\n' +
-      '  1021, 1021.22     Minor / stable line\n' +
-      '  1021.22.145       Full patch version (resolved to its LTS line)\n' +
+      '  1021.22           Stable line (exact LTS minor match only)\n' +
+      '  1021.22.145       Full patch version\n' +
+      '  1021@oldest       Oldest published patch in 1021.x.x\n' +
+      '  1021@latest       Latest published patch in 1021.x.x\n' +
+      '  1021.22@latest    Latest published patch in 1021.22.x\n' +
       '  cd                Latest npm dist-tag (@c8y/ngx-components)\n\n' +
       'Tip: run with --help-json to get the full machine-readable CLI schema.',
   )
@@ -101,7 +106,19 @@ program
 
 // Handle --help-json before Commander parses — avoids unknown-option errors on subcommands.
 if (process.argv.includes('--help-json')) {
-  console.log(JSON.stringify(CLI_SCHEMA, null, 2));
+  // writeSync in a loop with EAGAIN retry: spawnSync sets the child's stdout fd
+  // to non-blocking, so write() returns EAGAIN when the 8 KiB pipe buffer fills.
+  // Catching and retrying drains the pipe as the parent reads from the other end.
+  const buf = Buffer.from(JSON.stringify(CLI_SCHEMA, null, 2) + '\n', 'utf8');
+  let offset = 0;
+  while (offset < buf.length) {
+    try {
+      offset += writeSync(process.stdout.fd, buf, offset, buf.length - offset);
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== 'EAGAIN') throw e;
+      // pipe buffer full — spin until the parent drains it
+    }
+  }
   process.exit(0);
 }
 
@@ -156,8 +173,15 @@ Version alias formats:
   2025-lts          LTS alias
   2025, y2025       Year alias (y-prefix optional)
   1021, 1021.22     Minor / stable line
-  1021.22.145       Full patch version (resolved to its LTS line)
-  cd                Resolves to the current \`latest\` dist-tag on npm`,
+  1021.22.145       Full patch version
+  cd                Resolves to the current \`latest\` dist-tag on npm
+
+LTS version resolution:
+  --from 2025-lts   resolves to the EARLIEST patch (e.g. 1021.22.0) so that
+                    every change published after that line launched is included.
+  --to   2025-lts   resolves to the LATEST patch (e.g. 1021.22.159) so that
+                    all changes up to the most recent release are captured.
+  Exact versions (1021.22.50) and closest-match fallbacks are unaffected.`,
   )
   .action(async (opts) => {
     const { from: fromAlias, to: toAlias, format, npm: doNpm, showGrep, color, breakingOnly, category } = opts;
@@ -175,6 +199,7 @@ Version alias formats:
       ltsPatchVersions: {},
       angularVersions: {},
     };
+    let manifest: import('./schemas.js').NpmPackageManifest | null = null;
     let cdVersion: string | null = null;
 
     try {
@@ -185,6 +210,7 @@ Version alias formats:
       if (npmData) {
         versions = npmData.versions;
         npmInfo = npmData.npmInfo;
+        manifest = npmData.manifest;
       }
       cdVersion = resolvedCd;
     } catch (err) {
@@ -212,14 +238,18 @@ Version alias formats:
     if (isCd(toAlias))   process.stderr.write(`Resolved "cd" (--to)   → ${cdVersion}\n`);
 
     // ── Resolve version aliases ──────────────────────────────────────────────
-    const fromVersion = resolveVersion(resolvedFromAlias, versions);
-    const toVersion = resolveVersion(resolvedToAlias, versions);
+    // Accepts: LTS alias, year alias, exact stable-line, full X.Y.Z patch,
+    // X.Y.Z closest-match, @oldest/@latest range selectors, or "cd".
+    // Partial inputs (bare major, non-LTS X.Y) require @oldest or @latest.
+    const fromVersion = resolveArbitraryVersion(resolvedFromAlias, versions, manifest);
+    const toVersion   = resolveArbitraryVersion(resolvedToAlias,   versions, manifest);
 
     if (!fromVersion) {
       console.error(
         `\nError: unrecognised --from value "${resolvedFromAlias}".\n` +
-          `  Valid formats: LTS alias (2025-lts), year (2025, y2025), minor (1021.22),\n` +
-          `  full patch version (1021.22.145), or "cd" for the latest npm release.\n`,
+          `  Could not find this version on npm.\n` +
+          `  Valid formats: LTS alias (2025-lts), year (2025, y2025), stable line (1021.22),\n` +
+          `  full patch (1021.22.145), range selector (1021@oldest, 1021@latest), or "cd".\n`,
       );
       printKnownVersions(versions);
       process.exit(1);
@@ -228,52 +258,55 @@ Version alias formats:
     if (!toVersion) {
       console.error(
         `\nError: unrecognised --to value "${resolvedToAlias}".\n` +
-          `  Valid formats: LTS alias (2025-lts), year (2025, y2025), minor (1021.22),\n` +
-          `  full patch version (1021.22.145), or "cd" for the latest npm release.\n`,
+          `  Could not find this version on npm.\n` +
+          `  Valid formats: LTS alias (2025-lts), year (2025, y2025), stable line (1021.22),\n` +
+          `  full patch (1021.22.145), range selector (1021@oldest, 1021@latest), or "cd".\n`,
       );
       printKnownVersions(versions);
       process.exit(1);
     }
 
+    // ── Validate version ordering ────────────────────────────────────────────
+    // Primary check: semver of the resolved version strings must be strictly ascending.
+    if (semverCompare(toVersion.version, fromVersion.version) <= 0) {
+      console.error(
+        `\nError: --to "${resolvedToAlias}" (${toVersion.version}) is not newer than --from "${resolvedFromAlias}" (${fromVersion.version}).\n` +
+          `  Swap --from and --to.\n`,
+      );
+      process.exit(1);
+    }
+    // Secondary check: warn when release dates are available but suggest the wrong order.
+    if (
+      fromVersion.releaseDate &&
+      toVersion.releaseDate &&
+      new Date(toVersion.releaseDate) <= new Date(fromVersion.releaseDate)
+    ) {
+      process.stderr.write(
+        `[warning] --to "${resolvedToAlias}" (${toVersion.version}) has an earlier or equal release date than --from "${resolvedFromAlias}" (${fromVersion.version}). Changelog results may be incomplete.\n`,
+      );
+    }
+
     // ── Compute traversal range ──────────────────────────────────────────────
     const traversedVersions = getVersionRange(fromVersion, toVersion, versions);
 
-    if (traversedVersions.length === 0) {
-      if (fromVersion.ltsAlias === toVersion.ltsAlias) {
-        console.error(
-          `\nError: --from and --to both resolve to the same version line (${fromVersion.ltsAlias}).\n` +
-            `  There are no versions to traverse. Provide a --to that is a newer LTS line.\n`,
-        );
-      } else {
-        console.error(
-          `\nError: "${resolvedFromAlias}" (${fromVersion.ltsAlias}) is newer than "${resolvedToAlias}" (${toVersion.ltsAlias}).\n` +
-            `  Swap --from and --to.\n`,
-        );
-      }
-      process.exit(1);
-    }
-
     // ── Phase 2: fetch changelog + Angular release notes (parallel) ──────────
-    const traversedYears = traversedVersions.map((v) => parseInt(v.yearAlias));
-
     process.stderr.write('Fetching changelogs + Angular release notes...');
 
-    let prevAngular = fromVersion.angularVersion;
-    const angularFetches = traversedVersions.map((v) => {
-      const from = prevAngular;
-      prevAngular = v.angularVersion;
-      return from < v.angularVersion
-        ? fetchAngularBreakingChanges(from, v.angularVersion, v.ltsAlias)
-        : Promise.resolve<ReturnType<typeof fetchChangelogs> extends Promise<infer T> ? T : never>([]);
-    });
+    // Fetch Angular breaking changes directly from the from/to Angular versions —
+    // independent of which LTS lines were traversed. This correctly handles
+    // same-line upgrades (e.g. 1022@oldest → 1022@latest) where traversedVersions
+    // may be empty but the Angular version still increased.
+    const angularFetch = fromVersion.angularVersion < toVersion.angularVersion
+      ? fetchAngularBreakingChanges(fromVersion.angularVersion, toVersion.angularVersion, toVersion.ltsAlias ?? toVersion.version)
+      : Promise.resolve([] as Awaited<ReturnType<typeof fetchAngularBreakingChanges>>);
 
     let changelogChanges: Awaited<ReturnType<typeof fetchChangelogs>> = [];
-    let angularChangesPerHop: (Awaited<ReturnType<typeof fetchAngularBreakingChanges>>)[] = [];
+    let angularChangesRaw: Awaited<ReturnType<typeof fetchAngularBreakingChanges>> = [];
 
     try {
-      [changelogChanges, ...angularChangesPerHop] = await Promise.all([
-        fetchChangelogs(traversedYears, versions),
-        ...angularFetches,
+      [changelogChanges, angularChangesRaw] = await Promise.all([
+        fetchChangelogs(fromVersion, toVersion, versions),
+        angularFetch,
       ]);
     } catch (err) {
       process.stderr.write(' failed\n');
@@ -283,10 +316,9 @@ Version alias formats:
     process.stderr.write(' done\n');
 
     // ── Merge and filter ─────────────────────────────────────────────────────
-    const targetAliases = new Set(traversedVersions.map((v) => v.ltsAlias));
-    let breakingChanges = changelogChanges.filter((c) => targetAliases.has(c.introducedIn));
+    let breakingChanges = [...changelogChanges];
 
-    const angularChanges = angularChangesPerHop.flat().filter((c) => {
+    const angularChanges = angularChangesRaw.filter((c) => {
       if (breakingOnly && c.severity !== 'BREAKING') return false;
       if (category && c.category !== category) return false;
       return true;
@@ -306,7 +338,7 @@ Version alias formats:
     breakingChanges.sort((a, b) => {
       const sev = severityOrder[a.severity] - severityOrder[b.severity];
       if (sev !== 0) return sev;
-      return (versionOrder[a.introducedIn] ?? 99) - (versionOrder[b.introducedIn] ?? 99);
+      return (versionOrder[a.introducedIn ?? ''] ?? 99) - (versionOrder[b.introducedIn ?? ''] ?? 99);
     });
 
     // ── Print report ──────────────────────────────────────────────────────────
@@ -347,6 +379,17 @@ program
   });
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function semverCompare(a: string, b: string): number {
+  const parse = (v: string) => v.replace(/[^0-9.]/g, '').split('.').map(Number);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 function printKnownVersions(versions: SdkVersion[]): void {
   console.log('\nKnown SDK version aliases:\n');
