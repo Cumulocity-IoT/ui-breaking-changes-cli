@@ -112,7 +112,7 @@ program
   .description(
     'Fetch and report breaking changes between two SDK version lines.\n\n' +
       'Traverses every LTS version between --from and --to (from-exclusive, to-inclusive) and\n' +
-      'collects all BREAKING, NOTABLE, and INFO changes from the Cumulocity skills repository.',
+      'collects all BREAKING, NOTABLE, and INFO changes from the Cumulocity changelog and Angular release notes.',
   )
   .requiredOption(
     '-f, --from <version>',

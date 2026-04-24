@@ -162,10 +162,10 @@ src/
   data/
     breaking-changes.ts                 # Type definitions only (no hardcoded data)
   fetchers/
-    github-skills-fetcher.ts            # Fetches + parses all data from cumulocity-skills
+    github-skills-fetcher.ts            # Orchestrates WebSDK and REST API changelog scraping from cumulocity.com
     angular-changelog-fetcher.ts        # Breaking changes from Angular GitHub releases API
     angular-changelog-fetcher.test.ts
-    c8y-changelog-fetcher.ts            # Live Cumulocity changelog scraper (not yet in main pipeline)
+    c8y-changelog-fetcher.ts            # Live Cumulocity changelog scraper (cumulocity.com/docs)
     c8y-changelog-fetcher.test.ts
 sample/
   check-breaking-changes.yml            # Ready-made GitHub Actions workflow to copy into consumer repos
@@ -198,9 +198,10 @@ Future LTS lines (e.g. `y2027-lts`) appear automatically as soon as the tag exis
 
 ### 2. WebSDK / Angular breaking changes
 
-**Source:** `https://cumulocity.com/docs/{year}/change-logs/`
+**Source:** `https://cumulocity.com/docs/{year}/change-logs/`  
+**Equivalent filters:** `?component=.component-web-sdk&change-type=.change-type-announcement` and `?component=.component-web-sdk&change-type=.change-type-api-change`
 
-One request per year in the traversal range. The CLI scrapes `<section>` blocks filtered to `component-web-sdk`. Each entry is classified by severity and category:
+One request per year in the traversal range. The CLI fetches the full Hugo-rendered page (all entries are present in the HTML regardless of query parameters) and filters `<section>` blocks by their CSS classes: `component-web-sdk` combined with `change-type-announcement` or `change-type-api-change`. Each entry is classified by severity and category:
 
 | Category | Detection rule |
 |---|---|
@@ -224,9 +225,10 @@ Angular releases use a consistent `## Breaking Changes\n### package\n- bullet` f
 
 ### 3. REST API breaking changes
 
-**Source:** `https://cumulocity.com/docs/change-logs/` (global, no year filter)
+**Source:** `https://cumulocity.com/docs/change-logs/` (global, no year filter)  
+**Equivalent filter:** `?component=.component-rest-api&change-type=.change-type-api-change`
 
-The CLI scrapes the global changelog page filtered to `component-rest-api` and `change-type-api-change`. Entries are included when they have a parseable date and a non-empty description.
+The CLI fetches the global changelog page and filters `<section>` blocks by `component-rest-api` and `change-type-api-change`. Entries are included when they have a parseable date and a non-empty description.
 
 Each entry is attributed to an LTS alias dynamically: the entry is mapped to the most recent LTS year that is ≤ the entry's publication year. No years are hardcoded — works automatically as new LTS versions are added. Entries outside the traversal range are discarded.
 
