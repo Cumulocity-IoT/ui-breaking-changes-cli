@@ -295,8 +295,8 @@ export function resolveArbitraryVersion(
       lts.ltsAlias   === `${n}-lts` ||
       lts.yearAlias  === n ||
       lts.stableLine === n ||
-      lts.stableLine.startsWith(n) ||
-      lts.primaryVersion.startsWith(n);
+      (n.includes('.') && lts.stableLine.startsWith(n)) ||
+      (n.includes('.') && lts.primaryVersion.startsWith(n));
     if (isNamedMatch) {
       return {
         version:        lts.primaryVersion,

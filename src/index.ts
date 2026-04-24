@@ -106,13 +106,18 @@ program
 
 // Handle --help-json before Commander parses — avoids unknown-option errors on subcommands.
 if (process.argv.includes('--help-json')) {
-  // writeSync in a loop: a single write() syscall may write fewer bytes than
-  // requested when the OS pipe buffer fills up (8 KiB on macOS), truncating
-  // large JSON payloads. Loop until all bytes are written before exiting.
+  // writeSync in a loop with EAGAIN retry: spawnSync sets the child's stdout fd
+  // to non-blocking, so write() returns EAGAIN when the 8 KiB pipe buffer fills.
+  // Catching and retrying drains the pipe as the parent reads from the other end.
   const buf = Buffer.from(JSON.stringify(CLI_SCHEMA, null, 2) + '\n', 'utf8');
   let offset = 0;
   while (offset < buf.length) {
-    offset += writeSync(process.stdout.fd, buf, offset, buf.length - offset);
+    try {
+      offset += writeSync(process.stdout.fd, buf, offset, buf.length - offset);
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== 'EAGAIN') throw e;
+      // pipe buffer full — spin until the parent drains it
+    }
   }
   process.exit(0);
 }
