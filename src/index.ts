@@ -3,8 +3,11 @@
  * c8y-breaking-changes — CLI to detect and list breaking changes between
  * Cumulocity Web SDK versions.
  *
- * All data is fetched live from the Cumulocity skills GitHub repository.
- * No breaking change data is hardcoded — run the CLI with network access.
+ * Data sources:
+ *  - Version map: npm dist-tags on @c8y/ngx-components (y????-lts tags)
+ *  - WebSDK changes: https://cumulocity.com/docs/{year}/change-logs/
+ *  - REST API changes: https://cumulocity.com/docs/change-logs/
+ *  - Angular changes: https://api.github.com/repos/angular/angular/releases
  *
  * Usage:
  *   c8y-breaking-changes --from 2024-lts --to 2026-lts
@@ -14,9 +17,9 @@
 
 import { Command, Option } from 'commander';
 import { resolveVersion, getVersionRange } from './version-map.js';
-import { fetchCoreSkillsData, fetchMigrationPlans } from './fetchers/github-skills-fetcher.js';
+import { fetchChangelogs } from './fetchers/github-skills-fetcher.js';
 import { fetchAngularBreakingChanges } from './fetchers/angular-changelog-fetcher.js';
-import { fetchNpmVersionInfo, fetchLatestCdVersion, type NpmVersionInfo } from './npm-fetcher.js';
+import { fetchNpmDerivedData, fetchLatestCdVersion, type NpmVersionInfo } from './npm-fetcher.js';
 import { printReport } from './reporter.js';
 import type { SdkVersion } from './version-map.js';
 
@@ -35,8 +38,13 @@ const CLI_SCHEMA = {
   version: '1.0.0',
   description:
     'Detect and list Cumulocity Web SDK breaking changes between two version lines. ' +
-    'All data is fetched live from the Cumulocity skills GitHub repository — nothing is hardcoded.',
-  dataSource: 'https://github.com/Cumulocity-IoT/cumulocity-skills',
+    'Version map from npm dist-tags; change data scraped live from cumulocity.com.',
+  dataSources: [
+    'https://registry.npmjs.org/@c8y/ngx-components (version map)',
+    'https://cumulocity.com/docs/{year}/change-logs/ (WebSDK changes)',
+    'https://cumulocity.com/docs/change-logs/ (REST API changes)',
+    'https://api.github.com/repos/angular/angular/releases (Angular changes)',
+  ],
   versionAliasFormats: VERSION_ALIAS_FORMATS,
   commands: [
     {
@@ -65,7 +73,7 @@ const CLI_SCHEMA = {
     },
     {
       name: 'versions',
-      description: 'List all known SDK version aliases fetched live from the Cumulocity skills repository.',
+      description: 'List all known SDK version aliases derived from npm dist-tags on @c8y/ngx-components.',
       examples: [
         { description: 'Discover valid --from and --to values', command: 'c8y-breaking-changes versions' },
       ],
@@ -79,8 +87,8 @@ program
   .name('c8y-breaking-changes')
   .description(
     'Detect and list breaking changes between Cumulocity Web SDK versions.\n\n' +
-      'All change data is fetched live from:\n' +
-      '  https://github.com/Cumulocity-IoT/cumulocity-skills\n\n' +
+      'Version map: npm dist-tags on @c8y/ngx-components (y????-lts tags)\n' +
+      'Changes: cumulocity.com/docs/{year}/change-logs/ and /docs/change-logs/\n\n' +
       'Version alias formats:\n' +
       '  2025-lts          LTS alias\n' +
       '  2025, y2025       Year alias (y-prefix optional)\n' +
@@ -157,21 +165,41 @@ Version alias formats:
     const isCd = (s: string) => s.trim().toLowerCase() === 'cd';
     const needsCd = isCd(fromAlias) || isCd(toAlias);
 
-    // ── Phase 1: fetch core skills + optional CD version (parallel) ──────────
-    process.stderr.write('Fetching skills from GitHub...');
-    let coreData: Awaited<ReturnType<typeof fetchCoreSkillsData>>;
+    // ── Phase 1: version map from npm + optional CD version ──────────────────
+    process.stderr.write('Fetching version map from npm...');
+    let versions: SdkVersion[] = [];
+    let npmInfo: NpmVersionInfo = {
+      packageName: '@c8y/ngx-components',
+      latest: null,
+      distTags: {},
+      ltsPatchVersions: {},
+      angularVersions: {},
+    };
     let cdVersion: string | null = null;
+
     try {
-      [coreData, cdVersion] = await Promise.all([
-        fetchCoreSkillsData(),
+      const [npmData, resolvedCd] = await Promise.all([
+        doNpm !== false ? fetchNpmDerivedData() : Promise.resolve(null),
         needsCd ? fetchLatestCdVersion() : Promise.resolve(null),
       ]);
+      if (npmData) {
+        versions = npmData.versions;
+        npmInfo = npmData.npmInfo;
+      }
+      cdVersion = resolvedCd;
     } catch (err) {
       process.stderr.write(' failed\n');
       console.error(`\n${err instanceof Error ? err.message : err}\n`);
       process.exit(1);
     }
     process.stderr.write(' done\n');
+
+    if (versions.length === 0) {
+      console.error(
+        '\nError: could not build version map — npm registry unreachable or returned no y????-lts dist-tags.\n',
+      );
+      process.exit(1);
+    }
 
     // ── Resolve 'cd' alias to latest npm version ─────────────────────────────
     if (needsCd && !cdVersion) {
@@ -182,8 +210,6 @@ Version alias formats:
     const resolvedToAlias   = isCd(toAlias)   ? (cdVersion as string) : toAlias;
     if (isCd(fromAlias)) process.stderr.write(`Resolved "cd" (--from) → ${cdVersion}\n`);
     if (isCd(toAlias))   process.stderr.write(`Resolved "cd" (--to)   → ${cdVersion}\n`);
-
-    const { versions, changes: allChanges } = coreData;
 
     // ── Resolve version aliases ──────────────────────────────────────────────
     const fromVersion = resolveVersion(resolvedFromAlias, versions);
@@ -227,9 +253,45 @@ Version alias formats:
       process.exit(1);
     }
 
-    // ── Filter breaking changes to the traversal range ───────────────────────
+    // ── Phase 2: fetch changelog + Angular release notes (parallel) ──────────
+    const traversedYears = traversedVersions.map((v) => parseInt(v.yearAlias));
+
+    process.stderr.write('Fetching changelogs + Angular release notes...');
+
+    let prevAngular = fromVersion.angularVersion;
+    const angularFetches = traversedVersions.map((v) => {
+      const from = prevAngular;
+      prevAngular = v.angularVersion;
+      return from < v.angularVersion
+        ? fetchAngularBreakingChanges(from, v.angularVersion, v.ltsAlias)
+        : Promise.resolve<ReturnType<typeof fetchChangelogs> extends Promise<infer T> ? T : never>([]);
+    });
+
+    let changelogChanges: Awaited<ReturnType<typeof fetchChangelogs>> = [];
+    let angularChangesPerHop: (Awaited<ReturnType<typeof fetchAngularBreakingChanges>>)[] = [];
+
+    try {
+      [changelogChanges, ...angularChangesPerHop] = await Promise.all([
+        fetchChangelogs(traversedYears, versions),
+        ...angularFetches,
+      ]);
+    } catch (err) {
+      process.stderr.write(' failed\n');
+      console.error(`\n${err instanceof Error ? err.message : err}\n`);
+      process.exit(1);
+    }
+    process.stderr.write(' done\n');
+
+    // ── Merge and filter ─────────────────────────────────────────────────────
     const targetAliases = new Set(traversedVersions.map((v) => v.ltsAlias));
-    let breakingChanges = allChanges.filter((c) => targetAliases.has(c.introducedIn));
+    let breakingChanges = changelogChanges.filter((c) => targetAliases.has(c.introducedIn));
+
+    const angularChanges = angularChangesPerHop.flat().filter((c) => {
+      if (breakingOnly && c.severity !== 'BREAKING') return false;
+      if (category && c.category !== category) return false;
+      return true;
+    });
+    breakingChanges = [...breakingChanges, ...angularChanges];
 
     if (breakingOnly) {
       breakingChanges = breakingChanges.filter((c) => c.severity === 'BREAKING');
@@ -247,71 +309,12 @@ Version alias formats:
       return (versionOrder[a.introducedIn] ?? 99) - (versionOrder[b.introducedIn] ?? 99);
     });
 
-    // ── Phase 2: fetch npm info + migration plans + Angular release notes ────
-    // npm is fetched first so its Angular peerDependency data can override the
-    // skills version map before Angular release notes are triggered.
-    let npmInfo: NpmVersionInfo = {
-      packageName: '@c8y/ngx-components',
-      latest: null,
-      distTags: {},
-      ltsPatchVersions: {},
-      angularVersions: {},
-    };
-
-    if (doNpm !== false) {
-      process.stderr.write('Fetching npm version info...');
-      npmInfo = await fetchNpmVersionInfo(versions.map((v) => v.stableLine));
-      process.stderr.write(' done\n');
-
-      // Override angularVersion for every known SDK line with the live npm value.
-      // This is more reliable than the skills version map, which may lag behind.
-      for (const v of versions) {
-        const npmAngular = npmInfo.angularVersions[v.stableLine];
-        if (npmAngular) v.angularVersion = npmAngular;
-      }
-    }
-
-    process.stderr.write('Fetching migration guides + Angular release notes...');
-
-    // For each traversed LTS version, detect Angular version jumps and fetch the
-    // official Angular release notes for every intermediate major version.
-    // Example: 2025-lts (Angular 18) → 2026-lts (Angular 20) fetches Angular 19 + 20.
-    let prevAngular = fromVersion.angularVersion;
-    const angularFetches = traversedVersions.map((v) => {
-      const from = prevAngular;
-      prevAngular = v.angularVersion;
-      return from < v.angularVersion
-        ? fetchAngularBreakingChanges(from, v.angularVersion, v.ltsAlias)
-        : Promise.resolve<typeof breakingChanges>([]);
-    });
-
-    const [migrationPlan, ...angularChangesPerHop] = await Promise.all([
-      fetchMigrationPlans(traversedVersions.map((v) => v.ltsAlias), versions),
-      ...angularFetches,
-    ]);
-    process.stderr.write(' done\n');
-
-    // Merge Angular release-note changes, applying active filters
-    const angularChanges = angularChangesPerHop.flat().filter((c) => {
-      if (breakingOnly && c.severity !== 'BREAKING') return false;
-      if (category && c.category !== category) return false;
-      return true;
-    });
-    breakingChanges = [...breakingChanges, ...angularChanges];
-    // Re-sort after merge
-    breakingChanges.sort((a, b) => {
-      const sev = severityOrder[a.severity] - severityOrder[b.severity];
-      if (sev !== 0) return sev;
-      return (versionOrder[a.introducedIn] ?? 99) - (versionOrder[b.introducedIn] ?? 99);
-    });
-
     // ── Print report ──────────────────────────────────────────────────────────
     printReport({
       fromVersion,
       toVersion,
       traversedVersions,
       breakingChanges,
-      migrationPlan,
       npmInfo,
       showGrepHints: Boolean(showGrep),
       noColor: !color,
@@ -324,15 +327,15 @@ Version alias formats:
 program
   .command('versions')
   .description(
-    'List all known SDK version aliases, fetched live from the Cumulocity skills repository.\n' +
+    'List all known SDK version aliases, derived from npm dist-tags on @c8y/ngx-components.\n' +
       'Use this command to discover valid --from and --to values for the check command.',
   )
   .addHelpText('after', '\nExamples:\n  $ c8y-breaking-changes versions\n')
   .action(async () => {
-    process.stderr.write('Fetching version map from GitHub...');
+    process.stderr.write('Fetching version map from npm...');
     let versions: SdkVersion[];
     try {
-      const { versions: v } = await fetchCoreSkillsData();
+      const { versions: v } = await fetchNpmDerivedData();
       versions = v;
       process.stderr.write(' done\n');
     } catch (err) {

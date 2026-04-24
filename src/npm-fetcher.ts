@@ -1,8 +1,14 @@
 /**
  * Fetches version information from the npm registry.
  *
+ * The npm dist-tags on @c8y/ngx-components are the source of truth for the
+ * SDK version map. Tags like `y2026-lts` resolve to a full semver from which
+ * the stable line and Angular version (via peerDependencies) are derived.
+ *
  * Uses the public npm registry API — no auth required.
  */
+
+import type { SdkVersion } from './version-map.js';
 
 export interface NpmVersionInfo {
   /** The package name */
@@ -15,6 +21,14 @@ export interface NpmVersionInfo {
   ltsPatchVersions: Record<string, string>;
   /** Angular major version for each SDK stable line, derived from peerDependencies */
   angularVersions: Record<string, number>;
+}
+
+/**
+ * Combined result of a single npm fetch — both the version map and npm patch info.
+ */
+export interface NpmDerivedData {
+  versions: SdkVersion[];
+  npmInfo: NpmVersionInfo;
 }
 
 /**
@@ -38,15 +52,16 @@ const NPM_REGISTRY = 'https://registry.npmjs.org';
 const PRIMARY_PACKAGE = '@c8y/ngx-components';
 
 /**
- * Fetch npm dist-tags and derive the latest patch version per stable line.
+ * Fetch the full npm package manifest and derive both the SDK version map
+ * (from y????-lts dist-tags) and per-line patch version + Angular info.
  *
- * Falls back gracefully if the registry is unreachable — returns null values
- * rather than throwing.
+ * A single HTTP request replaces both the old skills-repo version map fetch
+ * and the separate npm version info fetch.
  *
- * @param stableLines - SDK stable lines to track, derived from fetched version data.
+ * Falls back gracefully if the registry is unreachable.
  */
-export async function fetchNpmVersionInfo(stableLines: string[]): Promise<NpmVersionInfo> {
-  const result: NpmVersionInfo = {
+export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
+  const emptyNpmInfo: NpmVersionInfo = {
     packageName: PRIMARY_PACKAGE,
     latest: null,
     distTags: {},
@@ -54,77 +69,121 @@ export async function fetchNpmVersionInfo(stableLines: string[]): Promise<NpmVer
     angularVersions: {},
   };
 
+  let data: ReturnType<typeof NpmPackageManifestSchema.safeParse>['data'] | undefined;
+
   try {
     const url = `${NPM_REGISTRY}/${encodeURIComponent(PRIMARY_PACKAGE)}`;
     const res = await fetch(url, {
       headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(20_000),
     });
-
-    if (!res.ok) {
-      return result;
-    }
+    if (!res.ok) return { versions: [], npmInfo: emptyNpmInfo };
 
     const parsed = NpmPackageManifestSchema.safeParse(await res.json());
     if (!parsed.success) {
       process.stderr.write(
         `\n[warning] npm registry response for ${PRIMARY_PACKAGE} has unexpected shape — ` +
-          `version info and Angular detection may be incomplete.\n  ${parsed.error.message}\n`,
+          `version map and patch info may be incomplete.\n  ${parsed.error.message}\n`,
       );
-      return result;
+      return { versions: [], npmInfo: emptyNpmInfo };
     }
-    const data = parsed.data;
-
-    result.distTags = data['dist-tags'] ?? {};
-    result.latest = result.distTags['latest'] ?? null;
-
-    // Derive latest patch version per known stable line from dist-tags
-    for (const [, version] of Object.entries(result.distTags)) {
-      for (const line of stableLines) {
-        if (version.startsWith(line)) {
-          const existing = result.ltsPatchVersions[line];
-          if (!existing || compareSemver(version, existing) > 0) {
-            result.ltsPatchVersions[line] = version;
-          }
-        }
-      }
-    }
-
-    // Scan all released versions for latest patch per line and their Angular peerDep
-    if (data.versions) {
-      for (const version of Object.keys(data.versions)) {
-        for (const line of stableLines) {
-          if (version.startsWith(line)) {
-            const existing = result.ltsPatchVersions[line];
-            if (!existing || compareSemver(version, existing) > 0) {
-              result.ltsPatchVersions[line] = version;
-            }
-          }
-        }
-      }
-    }
-
-    // Derive Angular major version per stable line from the latest version's peerDependencies
-    for (const line of stableLines) {
-      const latestPatch = result.ltsPatchVersions[line];
-      if (!latestPatch) continue;
-      const range = data.versions?.[latestPatch]?.peerDependencies?.['@angular/core'];
-      if (!range) continue;
-      const major = extractAngularMajorFromRange(range);
-      if (major !== null) result.angularVersions[line] = major;
-    }
+    data = parsed.data;
   } catch {
-    // Network unreachable — return empty result
+    return { versions: [], npmInfo: emptyNpmInfo };
   }
 
-  return result;
+  const distTags = data['dist-tags'] ?? {};
+  const latest = distTags['latest'] ?? null;
+
+  // ── Build version map from y????-lts dist-tags ─────────────────────────────
+  // Tags are like `y2026-lts` → `1023.14.50`. From that version we derive the
+  // stable line and Angular version. Future LTS lines (e.g. y2027-lts) are
+  // included automatically as soon as the tag exists — nothing is hardcoded.
+  const versions: SdkVersion[] = [];
+
+  for (const [tag, version] of Object.entries(distTags)) {
+    const match = tag.match(/^y(\d{4})-lts$/);
+    if (!match) continue;
+
+    const year = match[1];
+    const ltsAlias = `${year}-lts`;
+    const stableLine = deriveStableLine(version);
+    const angularRange = data.versions?.[version]?.peerDependencies?.['@angular/core'] ?? '';
+    const angularVersion = extractAngularMajorFromRange(angularRange) ?? 0;
+
+    versions.push({
+      ltsAlias,
+      yearAlias: year,
+      stableLine,
+      primaryVersion: version,
+      angularVersion,
+      supportStatus: version === latest ? 'Active' : 'LTS',
+      changelogUrl: `https://cumulocity.com/docs/${year}/change-logs/?component=.component-web-sdk`,
+    });
+  }
+
+  versions.sort((a, b) => parseFloat(a.stableLine) - parseFloat(b.stableLine));
+
+  // ── Build NpmVersionInfo for patch version display ─────────────────────────
+  const stableLines = versions.map((v) => v.stableLine);
+  const npmInfo: NpmVersionInfo = {
+    packageName: PRIMARY_PACKAGE,
+    latest,
+    distTags,
+    ltsPatchVersions: {},
+    angularVersions: {},
+  };
+
+  // Seed from dist-tags
+  for (const version of Object.values(distTags)) {
+    for (const line of stableLines) {
+      if (version.startsWith(line + '.') || version.startsWith(line)) {
+        const existing = npmInfo.ltsPatchVersions[line];
+        if (!existing || compareSemver(version, existing) > 0) {
+          npmInfo.ltsPatchVersions[line] = version;
+        }
+      }
+    }
+  }
+
+  // Scan all released versions for better patch data and Angular peerDeps
+  if (data.versions) {
+    for (const version of Object.keys(data.versions)) {
+      for (const line of stableLines) {
+        if (version.startsWith(line + '.') || version === line) {
+          const existing = npmInfo.ltsPatchVersions[line];
+          if (!existing || compareSemver(version, existing) > 0) {
+            npmInfo.ltsPatchVersions[line] = version;
+          }
+        }
+      }
+    }
+  }
+
+  // Derive Angular major version per stable line from peerDependencies
+  for (const line of stableLines) {
+    const latestPatch = npmInfo.ltsPatchVersions[line];
+    if (!latestPatch) continue;
+    const range = data.versions?.[latestPatch]?.peerDependencies?.['@angular/core'];
+    if (!range) continue;
+    const major = extractAngularMajorFromRange(range);
+    if (major !== null) npmInfo.angularVersions[line] = major;
+  }
+
+  // Sync angular versions back into the version objects from live peerDep data
+  for (const v of versions) {
+    const live = npmInfo.angularVersions[v.stableLine];
+    if (live) v.angularVersion = live;
+  }
+
+  return { versions, npmInfo };
 }
 
 /**
- * Fetch the latest CD (continuous delivery) release version from npm.
+ * Fetch only the latest CD (continuous delivery) release version from npm.
  *
- * Returns the full semver string pinned to the `latest` dist-tag (e.g. "1023.14.5"),
- * or `null` when the registry is unreachable.
+ * Used when --from or --to is the alias "cd". Returns the `latest` dist-tag
+ * version (e.g. "1023.14.5"), or `null` when the registry is unreachable.
  */
 export async function fetchLatestCdVersion(): Promise<string | null> {
   try {
@@ -140,6 +199,24 @@ export async function fetchLatestCdVersion(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Derive a stable line string from a full semver.
+ * "1023.14.50" → "1023.14"  (major.minor, when minor != 0)
+ * "1018.0.5"   → "1018"     (major only, when minor is 0)
+ *
+ * Future LTS lines may initially ship as x.0.y until their minor stabilises,
+ * so this derivation is always done live from the current dist-tag value.
+ */
+function deriveStableLine(version: string): string {
+  const parts = version.replace(/[^0-9.]/g, '').split('.');
+  if (parts.length >= 2 && parts[1] !== '0') {
+    return `${parts[0]}.${parts[1]}`;
+  }
+  return parts[0];
 }
 
 /**
@@ -162,3 +239,4 @@ function compareSemver(a: string, b: string): number {
   }
   return 0;
 }
+

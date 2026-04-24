@@ -2,7 +2,7 @@
 
 CLI to detect and list breaking changes between [Cumulocity Web SDK](https://cumulocity.com/docs/) versions.
 
-All breaking change data is fetched at runtime from the [Cumulocity skills repository](https://github.com/Cumulocity-IoT/cumulocity-skills) — nothing is hardcoded.
+All breaking change data is fetched at runtime by scraping the live Cumulocity documentation pages and the npm registry — nothing is hardcoded.
 
 ---
 
@@ -175,10 +175,10 @@ sample/
 
 | Source | What it provides |
 |---|---|
-| `Cumulocity-IoT/cumulocity-skills` | Version map, breaking change changelog, migration guides |
-| `registry.npmjs.org/@c8y/ngx-components` | Latest patch versions per LTS line, CD (`latest`) release, Angular major version via peerDependencies |
+| `registry.npmjs.org/@c8y/ngx-components` | Version map (from `y????-lts` dist-tags), latest patch versions, Angular version via `peerDependencies` |
+| `cumulocity.com/docs/{year}/change-logs/` | WebSDK breaking changes and announcements per release year |
+| `cumulocity.com/docs/change-logs/` | REST API breaking changes (global, all years) |
 | `api.github.com/repos/angular/angular` | Angular release notes — fetched per major version crossed during an upgrade |
-| `cumulocity.com/docs/{year}/change-logs/` | Live Cumulocity changelog (scraped by `c8y-changelog-fetcher`) |
 
 ---
 
@@ -186,18 +186,32 @@ sample/
 
 The CLI fetches from three distinct sources on every run and merges the results into a single report.
 
-### 1. WebSDK / Angular breaking changes
+### 1. Version map
 
-**Source skill:** [`websdk-breaking-changelog`](https://github.com/Cumulocity-IoT/cumulocity-skills/blob/main/skills/websdk-breaking-changelog/SKILL.md)  
-**Underlying data:** `https://cumulocity.com/docs/{year}/change-logs/?component=.component-web-sdk`
+**Source:** `https://registry.npmjs.org/@c8y/ngx-components` (dist-tags)
 
-Each LTS line documents its changes with `BREAKING`, `NOTABLE`, or `INFO` severity markers. The CLI reads every section within the traversal range (from-exclusive, to-inclusive) and classifies each entry by category:
+The SDK version list is derived entirely from npm dist-tags. Tags matching `y????-lts` (e.g. `y2025-lts`, `y2026-lts`) are resolved to their current full semver, from which the stable line and Angular version (via `peerDependencies`) are derived dynamically. There is no hardcoded version map.
+
+Future LTS lines (e.g. `y2027-lts`) appear automatically as soon as the tag exists. For an established LTS like 2026-lts, only the patch segment changes (`1023.14.x`) — the major and minor are fixed once the line stabilises.
+
+---
+
+### 2. WebSDK / Angular breaking changes
+
+**Source:** `https://cumulocity.com/docs/{year}/change-logs/`
+
+One request per year in the traversal range. The CLI scrapes `<section>` blocks filtered to `component-web-sdk`. Each entry is classified by severity and category:
 
 | Category | Detection rule |
 |---|---|
-| `angular` | Title contains "Angular N Upgrade" |
+| `angular` | Title or body matches `angular N`, `ng update`, `standalone` flag, or `zoneless` — **and** title contains "angular" or "upgrade" |
 | `security` | Title/body mentions "security", "XSS", "CSS injection", or "vulnerability" |
-| `websdk-ui` | Everything else from this skill |
+| `websdk-ui` | Everything else |
+
+Severity mapping:
+- `change-type-api-change` → `BREAKING`
+- `change-type-announcement` with title starting `Planned:` → `INFO`
+- Everything else → `NOTABLE`
 
 **Angular release notes (live):** [`angular-changelog-fetcher`](src/fetchers/angular-changelog-fetcher.ts)  
 **Source:** `https://api.github.com/repos/angular/angular/releases/tags/{N}.0.0`
@@ -206,75 +220,14 @@ Whenever the traversal crosses an Angular major version boundary, the CLI fetche
 
 Angular releases use a consistent `## Breaking Changes\n### package\n- bullet` format. The parser extracts each bullet per package and adds it as a `BREAKING / angular` entry attributed to the LTS alias that introduced the corresponding Angular major.
 
-**Relationship to the skills data:** The `websdk-breaking-changelog` skill contains a single curated "Angular N Upgrade" entry summarising the Cumulocity-specific impact. The Angular release notes provide the **full upstream** Angular breaking changes on top of that.
-
-**Example — 2025-lts → 2026-lts returns (8 BREAKING, 4 NOTABLE):**
-
-| Severity | Category | Title |
-|---|---|---|
-| BREAKING | angular | Angular 20 Upgrade; `standalone` flag default changed |
-| BREAKING | websdk-ui | Separate login application replaces built-in login |
-| BREAKING | websdk-ui | `OperationsListModule` removed |
-| BREAKING | websdk-ui | `getNamedDashboardOrCreate` removed from context-dashboard service |
-| BREAKING | websdk-ui | Routes that use context dashboards must define `rootContext: ViewContext.Dashboard` |
-| BREAKING | websdk-ui | `loadConfigComponent` deprecated; widget config sections changed |
-| BREAKING | websdk-ui | Wildcard search replaces full-text search |
-| BREAKING | websdk-ui | LWM2M module will be removed from `@c8y/ngx-components` |
-| NOTABLE | security | HTML widget moved to GA; strict sanitization enabled by default |
-| NOTABLE | security | Security: XSS vulnerability fixed in custom tooltips (Echarts) |
-| NOTABLE | security | Security: CSS injection vulnerability fixed |
-| NOTABLE | websdk-ui | New data explorer and Data point graph widget — now GA |
-
 ---
 
-### 2. REST API breaking changes
+### 3. REST API breaking changes
 
-**Source skill:** [`c8y-client-breaking-changelog`](https://github.com/Cumulocity-IoT/cumulocity-skills/blob/main/skills/c8y-client-breaking-changelog/SKILL.md)  
-**Underlying data:** `https://cumulocity.com/docs/change-logs/?component=.component-rest-api`
+**Source:** `https://cumulocity.com/docs/change-logs/` (global, no year filter)
 
-Only entries tagged **API CHANGE** are included. Each entry carries a `Date:` field which the CLI maps to an LTS alias dynamically: the entry is attributed to the most recent LTS year that is ≤ the entry's publication year. This means REST API changes land in the report when their date falls within the traversal range.
+The CLI scrapes the global changelog page filtered to `component-rest-api` and `change-type-api-change`. Entries are included when they have a parseable date and a non-empty description.
 
-**Example — 2024-lts → 2026-lts includes these REST-API changes (all dated 2025, attributed to 2025-lts):**
+Each entry is attributed to an LTS alias dynamically: the entry is mapped to the most recent LTS year that is ≤ the entry's publication year. No years are hardcoded — works automatically as new LTS versions are added. Entries outside the traversal range are discarded.
 
-| Entry | Date | Impact |
-|---|---|---|
-| `history` field removed from the Alarm API | Dec 2025 | `IAlarm.history` no longer present in responses |
-| Enhanced security for encrypted tenant options | Oct 2025 | `TenantOptionsService` may return `<<Encrypted>>` for non-owning callers |
-| Inventory API — `withChildren` default changed `true` → `false` | Sep 2025 | Must pass `{ withChildren: true }` explicitly |
-| Inventory `withParents=true` now returns all ancestors | Sep 2025 | Previously capped at 3 levels |
-| Measurement API — time series sort order changed to newest-first | Sep 2025 | Add `revert: false` to restore ascending order |
-| `c8y_PreviousMeasurements` is now a restricted property | Jul 2025 | Fragment silently ignored on create/update |
-| Inventory wildcard search is now case-insensitive | Jun 2025 | Wildcard queries may return broader results |
-| Notifications 2.0 — wildcard subscriptions now include operations | Jan 2025 | Subscribers must handle operation payloads |
-
-> REST API changes are absent from a 2025-lts → 2026-lts run because the skills repository has not yet catalogued 2026-dated API changes. As the skills content is updated, they will appear automatically.
-
----
-
-### 3. Version-specific migration guides
-
-**Source skills:** `websdk-{major}-upgrade` (e.g. [`websdk-1023-upgrade`](https://github.com/Cumulocity-IoT/cumulocity-skills/blob/main/skills/websdk-1023-upgrade/SKILL.md))  
-**Mirrors content from:** [`cumulocity.com/codex/migration-guides/updating-web-sdk-version/`](https://cumulocity.com/codex/migration-guides/updating-web-sdk-version/overview#version-specific-migration)
-
-For each LTS version in the traversal range, the CLI fetches the corresponding upgrade skill and extracts the numbered migration steps. The guide covers:
-
-- `ng update` commands to run for the Angular upgrade
-- Exact `@c8y/*` dependency versions to pin in `package.json`
-- Peer dependency requirements (TypeScript, Node.js, RxJS, `ngx-bootstrap`, `@angular/cdk`)
-- Breaking API changes with before/after code examples
-- `grep` patterns to locate affected symbols in your codebase
-
-The CLI applies upgrade skills **one step at a time** in version order. A multi-hop upgrade (e.g. 2024-lts → 2026-lts) fetches and concatenates the guides for each intermediate version.
-
-**Example — migration steps for the 2025-lts → 2026-lts hop (websdk-1023-upgrade, 8 steps):**
-
-| Step | Action |
-|---|---|
-| 1 | `ng update @angular/core@20 @angular/cli@20` |
-| 2 | Update all `@c8y/*` packages to `1023.x.x` |
-| 3 | Update TypeScript to `>=5.9.3` |
-| 4 | Update `ngx-bootstrap` to `20.0.2` |
-| 5 | Update `@angular/cdk` (and `@angular/material`) to `@20` |
-| 6 | Verify Node.js (`^20.11 \|\| ^22`), TypeScript, and RxJS compatibility |
-| 7 | `rm -rf node_modules && npm install` |
-| 8 | `npm start` — fix remaining compilation errors |
+Severity is derived from the entry content: titles starting with `Planned:` become `INFO`; entries that add or broaden data (e.g. "now includes", "becomes case-insensitive") become `NOTABLE`; everything else is `BREAKING`.

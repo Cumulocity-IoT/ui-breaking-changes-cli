@@ -1,9 +1,9 @@
 /**
  * Type definitions for breaking change data.
  *
- * All actual data is fetched at runtime from:
- *  - https://github.com/Cumulocity-IoT/cumulocity-skills/blob/main/skills/websdk-breaking-changelog/SKILL.md
- *  - https://github.com/Cumulocity-IoT/cumulocity-skills/blob/main/skills/c8y-client-breaking-changelog/SKILL.md
+ * All actual data is fetched at runtime by scraping:
+ *  - https://cumulocity.com/docs/{year}/change-logs/ (WebSDK changes)
+ *  - https://cumulocity.com/docs/change-logs/        (REST API changes)
  *
  * See src/fetchers/github-skills-fetcher.ts for the fetch + parse logic.
  */
@@ -18,22 +18,9 @@ export interface BreakingChange {
   category: Category;
   title: string;
   description: string;
-  actionRequired: string;
+  /** Specific action the developer must take; may be absent for informational entries */
+  actionRequired?: string;
   /** Optional grep hints for finding affected code */
   grepHints?: string[];
   sourceUrl?: string;
-}
-
-export interface MigrationStep {
-  order: number;
-  title: string;
-  description?: string;
-  commands?: string[];
-}
-
-export interface VersionMigration {
-  fromLine: string;
-  toLine: string;
-  steps: MigrationStep[];
-  referenceUrl: string;
 }
