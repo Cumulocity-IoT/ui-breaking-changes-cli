@@ -8,7 +8,8 @@
  * Uses the public npm registry API — no auth required.
  */
 
-import type { SdkVersion } from './version-map.js';
+import type { SdkVersion, InputVersion } from './version-map.js';
+import { resolveVersion } from './version-map.js';
 
 export interface NpmVersionInfo {
   /** The package name */
@@ -29,6 +30,8 @@ export interface NpmVersionInfo {
 export interface NpmDerivedData {
   versions: SdkVersion[];
   npmInfo: NpmVersionInfo;
+  /** The raw validated npm manifest, used for arbitrary version resolution. Null on fetch failure. */
+  manifest: import('./schemas.js').NpmPackageManifest | null;
 }
 
 /**
@@ -77,7 +80,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(20_000),
     });
-    if (!res.ok) return { versions: [], npmInfo: emptyNpmInfo };
+    if (!res.ok) return { versions: [], npmInfo: emptyNpmInfo, manifest: null };
 
     const parsed = NpmPackageManifestSchema.safeParse(await res.json());
     if (!parsed.success) {
@@ -85,11 +88,11 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
         `\n[warning] npm registry response for ${PRIMARY_PACKAGE} has unexpected shape — ` +
           `version map and patch info may be incomplete.\n  ${parsed.error.message}\n`,
       );
-      return { versions: [], npmInfo: emptyNpmInfo };
+      return { versions: [], npmInfo: emptyNpmInfo, manifest: null };
     }
     data = parsed.data;
   } catch {
-    return { versions: [], npmInfo: emptyNpmInfo };
+    return { versions: [], npmInfo: emptyNpmInfo, manifest: null };
   }
 
   const distTags = data['dist-tags'] ?? {};
@@ -119,10 +122,31 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
       angularVersion,
       supportStatus: version === latest ? 'Active' : 'LTS',
       changelogUrl: `https://cumulocity.com/docs/${year}/change-logs/?component=.component-web-sdk`,
+      releaseDate: '',  // populated below once all versions are collected
     });
   }
 
   versions.sort((a, b) => parseFloat(a.stableLine) - parseFloat(b.stableLine));
+
+  // ── Populate releaseDate from npm time map ─────────────────────────────────
+  // `data.time` maps every version string to an ISO 8601 publish timestamp.
+  // The "release date" for an LTS line is when the FIRST version of that line
+  // (i.e. stableLine + ".0") was published.  If that exact version is absent,
+  // fall back to the earliest timestamp among all versions in the stable line.
+  const timeMap = data.time ?? {};
+  for (const v of versions) {
+    const firstPatch = `${v.stableLine}.0`;
+    if (timeMap[firstPatch]) {
+      v.releaseDate = timeMap[firstPatch];
+    } else {
+      // Find the earliest published version matching this stable line
+      const entry = Object.entries(timeMap)
+        .filter(([ver]) => /^\d/.test(ver) && ver.startsWith(v.stableLine + '.'))
+        .sort(([, a], [, b]) => a.localeCompare(b))  // ISO dates sort lexicographically
+        [0];
+      v.releaseDate = entry?.[1] ?? '';
+    }
+  }
 
   // ── Build NpmVersionInfo for patch version display ─────────────────────────
   const stableLines = versions.map((v) => v.stableLine);
@@ -176,7 +200,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
     if (live) v.angularVersion = live;
   }
 
-  return { versions, npmInfo };
+  return { versions, npmInfo, manifest: data };
 }
 
 /**
@@ -199,6 +223,132 @@ export async function fetchLatestCdVersion(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve any version alias or exact npm version string to an `InputVersion`
+ * with a release date and Angular version populated from the npm manifest.
+ *
+ * Resolution order:
+ *  1. `@oldest` / `@latest` suffix — explicit range selector.
+ *       `1021@oldest`    → earliest published patch in 1021.x.x
+ *       `1021@latest`    → latest  published patch in 1021.x.x
+ *       `1021.22@latest` → latest  published patch in 1021.22.x
+ *       The prefix may be any number of dot-separated segments.
+ *  2. LTS alias / year alias / exact stable-line match via `resolveVersion`.
+ *       Returns `lts.primaryVersion` (the dist-tag value) with `lts.releaseDate`
+ *       (the date the stable line first appeared on npm, used for range filtering).
+ *  3. Full semver `X.Y.Z` only — exact match in the npm `time` map, or the
+ *       closest version in the same `X.Y.*` range when the exact patch was
+ *       never published (e.g. `1021.0.0` → `1021.0.4`).
+ *
+ * Partial inputs that are NOT LTS aliases and NOT full semvers (`1021`, `1021.41`)
+ * return `undefined`. Use the `@oldest` / `@latest` syntax instead.
+ */
+export function resolveArbitraryVersion(
+  alias: string,
+  versions: SdkVersion[],
+  manifest: import('./schemas.js').NpmPackageManifest | null,
+): InputVersion | undefined {
+  // ── Step 1: @oldest / @latest ──────────────────────────────────────────────
+  // Explicit range selector: <prefix>@oldest or <prefix>@latest.
+  // The prefix is matched as a version-string prefix (dotted segments).
+  const atMatch = /^([\d.]+)@(oldest|latest)$/i.exec(alias.trim());
+  if (atMatch) {
+    if (!manifest) return undefined;
+    const [, prefix, qualifier] = atMatch;
+    const timeMap     = manifest.time ?? {};
+    const versionsMap = manifest.versions ?? {};
+    const dotPrefix   = prefix + '.';
+    const patches = Object.keys(timeMap)
+      .filter((ver) => ver.startsWith(dotPrefix) && /^\d+\.\d+\.\d+$/.test(ver))
+      .sort((a, b) => compareSemver(a, b));
+    if (patches.length === 0) return undefined;
+    const resolvedVer = qualifier.toLowerCase() === 'oldest' ? patches[0] : patches[patches.length - 1];
+    const angularRange = versionsMap[resolvedVer]?.peerDependencies?.['@angular/core'] ?? '';
+    const parts        = resolvedVer.split('.');
+    const stableLine   = parts[1] !== '0' ? `${parts[0]}.${parts[1]}` : parts[0];
+    const matchingLts  = resolveVersion(resolvedVer, versions);
+    return {
+      version:        resolvedVer,
+      releaseDate:    timeMap[resolvedVer] ?? '',
+      angularVersion: extractAngularMajorFromRange(angularRange) ?? matchingLts?.angularVersion ?? 0,
+      ltsAlias:       matchingLts?.ltsAlias ?? null,
+      stableLine:     matchingLts?.stableLine ?? stableLine,
+    };
+  }
+
+  // ── Step 2: LTS alias / year alias / exact stable-line match ──────────────
+  // Returns the dist-tag version (primaryVersion) paired with the line's
+  // initial release date — so getVersionRange date filtering sees the correct
+  // start-of-line boundary regardless of how recent the dist-tag patch is.
+  //
+  // We accept named aliases and exact stable-line strings. Bare SDK major numbers
+  // (e.g. "1021") are intentionally excluded — they must use @oldest / @latest.
+  // A "named" match is any LTS resolved via ltsAlias, yearAlias, or exact stableLine;
+  // the major-only fallback (single-segment input matching a major) is not accepted.
+  const lts = resolveVersion(alias, versions);
+  if (lts) {
+    const n = alias.trim().toLowerCase().replace(/^y/, '');
+    const isNamedMatch =
+      lts.ltsAlias   === n ||
+      lts.ltsAlias   === `${n}-lts` ||
+      lts.yearAlias  === n ||
+      lts.stableLine === n ||
+      lts.stableLine.startsWith(n) ||
+      lts.primaryVersion.startsWith(n);
+    if (isNamedMatch) {
+      return {
+        version:        lts.primaryVersion,
+        releaseDate:    lts.releaseDate,
+        angularVersion: lts.angularVersion,
+        ltsAlias:       lts.ltsAlias,
+        stableLine:     lts.stableLine,
+      };
+    }
+  }
+
+  // ── Step 3: Full semver (X.Y.Z) only ──────────────────────────────────────
+  // Partial inputs (single segment or two-segment non-LTS) are not accepted
+  // without an explicit @oldest / @latest qualifier.
+  if (!/^\d+\.\d+\.\d+$/.test(alias.trim())) return undefined;
+  if (!manifest) return undefined;
+
+  const normalized  = alias.trim();
+  const timeMap     = manifest.time ?? {};
+  const versionsMap = manifest.versions ?? {};
+
+  const makeInputVersion = (ver: string): InputVersion => {
+    const angularRange = versionsMap[ver]?.peerDependencies?.['@angular/core'] ?? '';
+    const parts        = ver.split('.');
+    const stableLine   = parts[1] !== '0' ? `${parts[0]}.${parts[1]}` : parts[0];
+    const matchingLts  = resolveVersion(ver, versions);
+    return {
+      version:        ver,
+      releaseDate:    timeMap[ver] ?? '',
+      angularVersion: extractAngularMajorFromRange(angularRange) ?? matchingLts?.angularVersion ?? 0,
+      ltsAlias:       matchingLts?.ltsAlias ?? null,
+      stableLine:     matchingLts?.stableLine ?? stableLine,
+    };
+  };
+
+  // Exact match
+  if (timeMap[normalized]) return makeInputVersion(normalized);
+
+  // Closest version in the same major.minor
+  const parts      = normalized.split('.');
+  const prefix     = `${parts[0]}.${parts[1]}.`;
+  const inputPatch = parseInt(parts[2], 10);
+
+  const candidates = Object.keys(timeMap)
+    .filter((ver) => ver.startsWith(prefix) && /^\d+\.\d+\.\d+$/.test(ver))
+    .map((ver) => ({ ver, patch: parseInt(ver.split('.')[2], 10) }))
+    .filter((c) => !isNaN(c.patch));
+
+  if (candidates.length === 0) return undefined;
+
+  candidates.sort((a, b) => Math.abs(a.patch - inputPatch) - Math.abs(b.patch - inputPatch));
+  return makeInputVersion(candidates[0].ver);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

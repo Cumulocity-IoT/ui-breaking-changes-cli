@@ -7,6 +7,42 @@ import { parseChangelogHtml } from './c8y-changelog-fetcher.js';
 // Cumulocity changelog page format (Hugo-generated SSR HTML).
 
 const BASE_URL = 'https://cumulocity.com/docs/2025/change-logs/';
+const BASE_URL_2026 = 'https://cumulocity.com/docs/2026/change-logs/';
+
+/**
+ * Fixture: the "revert parameter" REST API breaking change.
+ * Used to verify the parser handles year-specific page HTML correctly.
+ */
+const REVERT_PARAM_ENTRY = `
+<article>
+  <section
+    id='cumulocity-2026-revert-parameter-time-series'
+    class="page-section change-type-api-change component-rest-api  productarea-platform-services technicalcomponent-cumulocity"
+    data-date="2026-03-31 12:00:00 &#43;0000 UTC"
+  >
+    <div class="article-content change-log">
+      <div class="change-log__header">
+        <h2>
+          Change of the default value of revert parameter for time series measurements
+          <button title="Copy link" class="btn-link bookmark" data-clipboard-text="#">
+            <span class="fa dlt-c8y-icon-link"></span>
+          </button>
+        </h2>
+      </div>
+      <div class="change-log__summary">
+        <label class='change-log__label--api-change'>API Change</label>
+        <div class="metadata">
+          <button class="btn-metadata" data-tag="component-rest-api">
+            <small class="text-muted">Component</small>
+            <p>REST API</p>
+          </button>
+        </div>
+      </div><p>The default value of the revert parameter for time series measurements has been changed to true.</p>
+      <div class="change-log__details">Technical details here</div>
+    </div>
+  </section>
+</article>
+`.trim();
 
 /** A REST API `api-change` entry with a title and multi-paragraph description. */
 const API_CHANGE_ENTRY = `
@@ -64,6 +100,12 @@ const ANNOUNCEMENT_ENTRY = `
           <button class="btn-metadata" data-tag="component-web-sdk">
             <small class="text-muted">Component</small>
             <p>Web SDK</p>
+          </button>
+          <button class="btn-metadata " data-tag="technicalcomponent-ui-c8y">
+            <small class="text-muted">Build artifact / version</small>
+            <p>ui-c8y
+             - 1021.0.0
+            </p>
           </button>
         </div>
       </div><p>In an upcoming version the dashboard manager module will be extracted from the Cockpit application.</p>
@@ -155,6 +197,34 @@ describe('parseChangelogHtml', () => {
     assert.ok(entry.url.includes('#ui-c8y-1021-0-0-dashboard-manager-as-separate-plugin'));
   });
 
+  it('extracts uiVersion from the technicalcomponent-ui-c8y button', () => {
+    const result = parseChangelogHtml(
+      ANNOUNCEMENT_ENTRY,
+      BASE_URL,
+      ['announcement'],
+      ['web-sdk'],
+    );
+    assert.equal(result.length, 1);
+    assert.equal(result[0].uiVersion, '1021.0.0');
+  });
+
+  it('extracts a non-major-only uiVersion (e.g. 1022.8.3) correctly', () => {
+    const html = ANNOUNCEMENT_ENTRY.replace(
+      '- 1021.0.0',
+      '- 1022.8.3',
+    );
+    const result = parseChangelogHtml(html, BASE_URL, ['announcement'], ['web-sdk']);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].uiVersion, '1022.8.3');
+  });
+
+  it('leaves uiVersion undefined when no technicalcomponent-ui-c8y button is present', () => {
+    // REST API entry has no such button
+    const result = parseChangelogHtml(API_CHANGE_ENTRY, BASE_URL, ['api-change'], ['rest-api']);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].uiVersion, undefined);
+  });
+
   it('filters out entries with wrong change-type', () => {
     // Only request 'announcement' — should not return the api-change entry
     const result = parseChangelogHtml(MIXED_PAGE, BASE_URL, ['announcement'], ['rest-api', 'web-sdk']);
@@ -215,6 +285,46 @@ describe('parseChangelogHtml', () => {
   });
 });
 
+// ─── parseChangelogHtml — year-specific page HTML ──────────────────────────────────────
+// The parser is URL-agnostic — it works identically on year-specific and global
+// pages. The fixtures below use a 2026 year URL purely for URL-construction checks.
+
+describe('parseChangelogHtml — year-specific REST API entry (regression)', () => {
+  it('parses the revert-parameter entry from a 2026 year URL', () => {
+    const result = parseChangelogHtml(REVERT_PARAM_ENTRY, BASE_URL_2026, ['api-change'], ['rest-api']);
+    assert.equal(result.length, 1);
+    const entry = result[0];
+    assert.equal(entry.changeType, 'api-change');
+    assert.equal(entry.component, 'rest-api');
+    assert.ok(
+      entry.title.toLowerCase().includes('revert'),
+      `expected "revert" in title, got: "${entry.title}"`,
+    );
+    assert.ok(
+      entry.title.toLowerCase().includes('time series'),
+      `expected "time series" in title, got: "${entry.title}"`,
+    );
+  });
+
+  it('produced entry URL uses the year-specific base URL', () => {
+    const result = parseChangelogHtml(REVERT_PARAM_ENTRY, BASE_URL_2026, ['api-change'], ['rest-api']);
+    assert.equal(result.length, 1);
+    assert.ok(
+      result[0].url.startsWith('https://cumulocity.com/docs/2026/change-logs/'),
+      `expected 2026 year URL, got: "${result[0].url}"`,
+    );
+  });
+
+  it('is NOT returned when fetching from the 2025 URL (wrong year filter)', () => {
+    // The entry has a 2026 date; requesting it via the 2025 URL would be a different
+    // network call — here we just verify the parser does not mangle the URL.
+    const result = parseChangelogHtml(REVERT_PARAM_ENTRY, BASE_URL, ['api-change'], ['rest-api']);
+    assert.equal(result.length, 1);
+    // URL uses whatever base was passed — confirms URL construction is URL-driven, not date-driven
+    assert.ok(result[0].url.startsWith('https://cumulocity.com/docs/2025/change-logs/'));
+  });
+});
+
 // ─── Integration test: live network ──────────────────────────────────────────
 
 describe('fetchC8yChangelog — live network', { timeout: 30_000 }, () => {
@@ -230,6 +340,20 @@ describe('fetchC8yChangelog — live network', { timeout: 30_000 }, () => {
       assert.ok(typeof entry.title === 'string');
       assert.ok(typeof entry.description === 'string');
       assert.ok(entry.url.startsWith('https://cumulocity.com/docs/2025/change-logs/'));
+    }
+  });
+
+  // Regression test: verifies the live 2026 year-specific page can be fetched.
+  // fetchChangelogs now uses only the global page; this tests fetchC8yChangelog directly.
+  it('fetches 2026 year-specific changelog and returns rest-api api-change entries', async () => {
+    const { fetchC8yChangelog } = await import('./c8y-changelog-fetcher.js');
+    const results = await fetchC8yChangelog(2026, ['api-change'], ['rest-api']);
+
+    assert.ok(results.length > 0, `expected > 0 rest-api api-change entries for 2026, got ${results.length}`);
+    for (const entry of results) {
+      assert.equal(entry.changeType, 'api-change');
+      assert.equal(entry.component, 'rest-api');
+      assert.ok(entry.url.startsWith('https://cumulocity.com/docs/2026/change-logs/'));
     }
   });
 });

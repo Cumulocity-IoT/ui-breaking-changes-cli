@@ -10,7 +10,9 @@
  * rather than silently producing bad data.
  */
 
-import { C8yChangelogEntrySchema, type C8yChangelogEntry } from '../schemas.js';
+import { C8yChangelogEntrySchema, ChangelogHtmlSchema, type C8yChangelogEntry } from '../schemas.js';
+import type { BreakingChange, Category, Severity } from '../data/breaking-changes.js';
+import type { InputVersion, SdkVersion } from '../version-map.js';
 export type { C8yChangelogEntry };
 
 const BASE_DOCS_URL = 'https://cumulocity.com/docs';
@@ -66,6 +68,15 @@ async function fetchChangelogUrl(
     return [];
   }
 
+  const validation = ChangelogHtmlSchema.safeParse(html);
+  if (!validation.success) {
+    process.stderr.write(
+      `\n[warning] Changelog page at ${url} failed structural validation — skipping.\n` +
+        `  ${validation.error.issues.map((e) => e.message).join('\\n  ')}\\n`,
+    );
+    return [];
+  }
+
   return parseChangelogHtml(html, url, changeTypes, components);
 }
 
@@ -77,7 +88,10 @@ async function fetchChangelogUrl(
  * data-date="...">` block.  The parser extracts:
  *
  *  - `id`          — section anchor
- *  - `date`        — from data-date attribute
+ *  - `date`        — from data-date attribute; falls back to the most recently
+ *                    seen `<h5>` date header when data-date is absent (used on
+ *                    the global /docs/change-logs/ page which groups entries
+ *                    under `<h5>Month DD, YYYY</h5>` headers)
  *  - `changeType`  — first `change-type-X` class, X returned (e.g. "api-change")
  *  - `component`   — first `component-X` class in the section, X returned (e.g. "rest-api")
  *  - `title`       — text content of `<h2>` (stripped of the copy-link button HTML)
@@ -100,6 +114,11 @@ export function parseChangelogHtml(
   // (attributes + body) or is irrelevant preamble before the first section.
   const chunks = html.split('<section');
 
+  // Track the most recently seen <h5> date header.  On the global changelog page
+  // entries may lack a data-date attribute and instead rely on the preceding
+  // <h5>Month DD, YYYY</h5> to indicate when they were published.
+  let lastH5Date = '';
+
   for (const chunk of chunks) {
     // Find the closing > of the opening tag (attributes may span multiple lines,
     // but none contain a bare > so indexOf is safe here).
@@ -108,6 +127,13 @@ export function parseChangelogHtml(
 
     const openTag = chunk.slice(0, tagEnd);
     const body    = chunk.slice(tagEnd + 1);
+
+    // Scan the body for any <h5> date header — it will apply to subsequent sections
+    const h5Match = body.match(/<h5[^>]*>([^<]+)<\/h5>/);
+    if (h5Match) {
+      const parsed = new Date(h5Match[1].trim());
+      if (!isNaN(parsed.getTime())) lastH5Date = parsed.toISOString();
+    }
 
     // Only process change-log sections
     if (!openTag.includes('page-section')) continue;
@@ -127,9 +153,9 @@ export function parseChangelogHtml(
     const idMatch = openTag.match(/id='([^']+)'/);
     const id = idMatch?.[1] ?? '';
 
-    // data-date attribute
+    // data-date attribute; fall back to the last h5 date header when absent
     const dateMatch = openTag.match(/data-date="([^"]+)"/);
-    const date = dateMatch ? dateMatch[1].replace(/&#43;/g, '+') : '';
+    const date = dateMatch ? dateMatch[1].replace(/&#43;/g, '+') : lastH5Date;
 
     // Title: text inside <h2> before the copy-link <button>
     const h2Match = body.match(/<h2[^>]*>([\s\S]*?)<\/h2>/);
@@ -143,6 +169,15 @@ export function parseChangelogHtml(
     );
     const description = descMatch ? stripHtml(descMatch[1]) : '';
 
+    // Optional: version string from the `data-tag="technicalcomponent-ui-c8y"` metadata button.
+    // Present on Web SDK entries; the <p> inside the button contains text like
+    // "ui-c8y\n - 1023.0.0".  Extract the first semver (major.minor or major.minor.patch)
+    // found anywhere in the <p> content.
+    const uiVersionButtonMatch = body.match(
+      /data-tag="technicalcomponent-ui-c8y"[\s\S]*?<p>[^<]*?(\d+\.\d+(?:\.\d+)*)\s*<\/p>/,
+    );
+    const uiVersion = uiVersionButtonMatch?.[1];
+
     const candidate = {
       id,
       date,
@@ -151,6 +186,7 @@ export function parseChangelogHtml(
       title,
       description,
       url: `${baseUrl}#${id}`,
+      ...(uiVersion ? { uiVersion } : {}),
     };
 
     const parsed = C8yChangelogEntrySchema.safeParse(candidate);
@@ -181,4 +217,194 @@ function extractFirstClassTag(classes: string, prefix: string): string | null {
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#43;/g, '+').trim();
+}
+
+// ─── Orchestration ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch all breaking changes for the given traversal years from the live
+ * Cumulocity documentation pages.
+ *
+ * Two sources in parallel:
+ *
+ *  - **WebSDK**: one request per year to the year-specific page
+ *    (`docs/{year}/change-logs/`), filtered to `web-sdk` component.
+ *    Entries are attributed by year (each year maps to one LTS alias).
+ *
+ *  - **REST API**: a single request to the global aggregated page
+ *    (`docs/change-logs/`), filtered to `rest-api` component.
+ *    Entries are attributed by publish date: each entry is assigned to the
+ *    first LTS version whose npm release date is ≥ the entry's publish date.
+ *    Only entries whose dates fall strictly after `fromVersion.releaseDate`
+ *    and up to and including `toVersion.releaseDate` are returned.
+ *
+ * @param traversedYears  Calendar years in the upgrade range (e.g. [2026])
+ * @param fromVersion     The version being upgraded FROM (used for REST API date boundary)
+ * @param toVersion       The version being upgraded TO (used for REST API date boundary)
+ * @param versions        Full known version list, used to map dates to LTS aliases
+ */
+export async function fetchChangelogs(
+  fromVersion: InputVersion,
+  toVersion: InputVersion,
+  versions: SdkVersion[],
+): Promise<BreakingChange[]> {
+  // Both WebSDK and REST API changes come from the single global changelog page.
+  // Date-based filtering (entry.date vs fromVersion/toVersion release dates)
+  // is applied uniformly — no year-specific URLs needed.
+  const [webSdkEntries, restApiEntries] = await Promise.all([
+    fetchC8yChangelogGlobal(['announcement', 'api-change'], ['web-sdk']),
+    fetchC8yChangelogGlobal(['api-change'], ['rest-api']),
+  ]);
+
+  const changes: BreakingChange[] = [];
+
+  for (const entry of webSdkEntries) {
+    const change = convertEntry(entry, fromVersion, toVersion, versions, classifyWebSdkSeverity, classifyWebSdkCategory);
+    if (change) changes.push(change);
+  }
+
+  for (const entry of restApiEntries) {
+    const change = convertEntry(entry, fromVersion, toVersion, versions, classifyRestApiSeverity, () => 'rest-api');
+    if (change) {
+      const { introducedIn: _unused, ...rest } = change;
+      changes.push(rest);
+    }
+  }
+
+  return changes;
+}
+
+// ─── Converters ───────────────────────────────────────────────────────────────
+
+function convertEntry(
+  entry: C8yChangelogEntry,
+  fromVersion: InputVersion,
+  toVersion: InputVersion,
+  versions: SdkVersion[],
+  classifySeverity: (entry: C8yChangelogEntry) => Severity,
+  classifyCategory: (title: string, body: string) => Category,
+): BreakingChange | null {
+  if (!entry.title) return null;
+
+  if (!isInDateRange(entry.date, fromVersion, toVersion)) return null;
+
+  // When a uiVersion is present, apply an additional semver range check.
+  if (entry.uiVersion) {
+    const [uiMaj, uiMin = 0, uiPatch = 0] = entry.uiVersion.split('.').map(Number);
+    const isMajorOnly = uiMin === 0 && uiPatch === 0;
+
+    if (isMajorOnly) {
+      // A major-only version (e.g. "1023.0.0") means the change is valid for all
+      // patches of that major series.  Just compare the major segment inclusively:
+      // include the entry when uiMajor falls anywhere in [fromMajor, toMajor].
+      const fromMajor = Number(fromVersion.version.split('.')[0]);
+      const toMajor   = Number(toVersion.version.split('.')[0]);
+      if (uiMaj < fromMajor || uiMaj > toMajor) return null;
+    } else {
+      // Exact version: include only when strictly after fromVersion and at most toVersion
+      // (mirrors the date filter semantics: strictly after from, on or before to).
+      if (
+        compareSemverLocal(entry.uiVersion, fromVersion.version) <= 0 ||
+        compareSemverLocal(entry.uiVersion, toVersion.version) > 0
+      ) {
+        return null;
+      }
+    }
+  }
+
+  const introducedIn = dateToLtsAlias(entry.date, versions);
+  if (!introducedIn) return null;
+
+  return {
+    introducedIn,
+    severity: classifySeverity(entry),
+    category: classifyCategory(entry.title, entry.description),
+    title: entry.title,
+    description: entry.description,
+    sourceUrl: entry.url,
+    ...(entry.uiVersion ? { uiVersion: entry.uiVersion } : {}),
+  };
+}
+
+// ─── Classification ───────────────────────────────────────────────────────────
+
+function classifyWebSdkSeverity(entry: C8yChangelogEntry): Severity {
+  if (entry.changeType === 'api-change') return 'BREAKING';
+  if (entry.title.toLowerCase().startsWith('planned:')) return 'INFO';
+  return 'NOTABLE';
+}
+
+function classifyWebSdkCategory(title: string, body: string): Category {
+  const text = (title + ' ' + body).toLowerCase();
+  if (/security|xss|css injection|vulnerabilit/.test(text)) return 'security';
+  if (
+    /\bangular \d+\b|\bng update\b|\bstandalone.{1,20}flag\b|\bzoneless\b/.test(text) &&
+    /upgrade|angular/i.test(title)
+  ) {
+    return 'angular';
+  }
+  return 'websdk-ui';
+}
+
+function classifyRestApiSeverity(entry: C8yChangelogEntry): Severity {
+  const text = (entry.title + ' ' + entry.description).toLowerCase();
+  if (entry.title.toLowerCase().startsWith('planned:')) return 'INFO';
+  if (/\bnow includes?\b|\bbecomes case.insensitive\b/.test(text)) return 'NOTABLE';
+  return 'BREAKING';
+}
+
+// ─── Date / version mapping ───────────────────────────────────────────────────
+
+/**
+ * Map an entry's publish date to the LTS version that first incorporates it.
+ *
+ * An entry published on date D belongs to the LTS whose npm release date is the
+ * SMALLEST value that is still ≥ D.  In other words: the first LTS that shipped
+ * AFTER the entry was published, so that upgrading to it exposes the change.
+ *
+ * Versions without a populated releaseDate are excluded from the search.
+ */
+function dateToLtsAlias(entryDate: string, versions: SdkVersion[]): string | null {
+  const d = new Date(entryDate).getTime();
+  if (isNaN(d)) return null;
+
+  const sorted = versions
+    .filter((v) => v.releaseDate)
+    .sort((a, b) => new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime());
+
+  return sorted.find((v) => new Date(v.releaseDate).getTime() >= d)?.ltsAlias ?? null;
+}
+
+/**
+ * Returns true when the entry's date falls strictly after `fromVersion.releaseDate`
+ * and on or before `toVersion.releaseDate`.
+ *
+ * When either releaseDate is absent (npm unavailable), the filter cannot be applied
+ * and false is returned (the entry is excluded rather than mis-attributed).
+ */
+function isInDateRange(
+  entryDate: string,
+  fromVersion: InputVersion,
+  toVersion: InputVersion,
+): boolean {
+  if (!fromVersion.releaseDate || !toVersion.releaseDate) return false;
+  const d    = new Date(entryDate).getTime();
+  const from = new Date(fromVersion.releaseDate).getTime();
+  const to   = new Date(toVersion.releaseDate).getTime();
+  return !isNaN(d) && d > from && d <= to;
+}
+
+/**
+ * Compare two semver-like strings (e.g. "1021.0.0" vs "1022.8.3").
+ * Returns positive if a > b, negative if a < b, 0 if equal.
+ */
+function compareSemverLocal(a: string, b: string): number {
+  const parse = (v: string) => v.split('.').map(Number);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }

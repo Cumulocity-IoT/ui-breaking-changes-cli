@@ -5,7 +5,7 @@
  */
 
 import chalk from 'chalk';
-import type { SdkVersion } from './version-map.js';
+import type { InputVersion, SdkVersion } from './version-map.js';
 import type { BreakingChange, Category } from './data/breaking-changes.js';
 import type { NpmVersionInfo } from './npm-fetcher.js';
 
@@ -14,8 +14,8 @@ import type { NpmVersionInfo } from './npm-fetcher.js';
 // ---------------------------------------------------------------------------
 
 export interface ReportOptions {
-  fromVersion: SdkVersion;
-  toVersion: SdkVersion;
+  fromVersion: InputVersion;
+  toVersion: InputVersion;
   /** All versions traversed (from exclusive, to inclusive) */
   traversedVersions: SdkVersion[];
   breakingChanges: BreakingChange[];
@@ -69,18 +69,16 @@ function printPretty(opts: ReportOptions): void {
   // ── Summary header ────────────────────────────────────────────────────────
   console.log(chalk.bold('  Upgrade path:'));
   console.log(
-    `    ${chalk.yellow(fromVersion.ltsAlias)} (SDK ${fromVersion.stableLine}.x, Angular ${fromVersion.angularVersion})` +
+    `    ${chalk.yellow(versionLabel(fromVersion))}` +
       chalk.gray(' → ') +
-      `${chalk.green(toVersion.ltsAlias)} (SDK ${toVersion.stableLine}.x, Angular ${toVersion.angularVersion})`,
+      chalk.green(versionLabel(toVersion)),
   );
   console.log('');
 
-  if (traversedVersions.length === 0) {
-    console.log(chalk.yellow('  ⚠  No versions in the upgrade path. Are from/to versions the same or in reverse order?'));
-    return;
-  }
-
   console.log(chalk.bold('  Versions traversed:'));
+  if (traversedVersions.length === 0) {
+    console.log(chalk.dim('    (no LTS lines in this range — patch-only or same-line upgrade)'));
+  }
   for (const v of traversedVersions) {
     const latestPatch =
       npmInfo.ltsPatchVersions[v.stableLine] ??
@@ -88,7 +86,8 @@ function printPretty(opts: ReportOptions): void {
       null;
 
     const patchLabel = latestPatch ? chalk.dim(` (latest patch: ${latestPatch})`) : '';
-    console.log(`    ${chalk.green('•')} ${chalk.bold(v.ltsAlias)} — SDK ${v.stableLine}.x, Angular ${v.angularVersion}${patchLabel}`);
+    const dateLabel = v.releaseDate ? chalk.dim(` · released ${formatDate(v.releaseDate)}`) : '';
+    console.log(`    ${chalk.green('•')} ${chalk.bold(v.ltsAlias)} — SDK ${v.stableLine}.x, Angular ${v.angularVersion}${dateLabel}${patchLabel}`);
   }
 
   if (npmInfo.latest) {
@@ -149,10 +148,11 @@ function printPretty(opts: ReportOptions): void {
 
 function printChangeItem(item: BreakingChange, opts: ReportOptions): void {
   const badge = severityBadge(item.severity);
-  const versionLabel = chalk.dim(`[${item.introducedIn}]`);
+  const versionTag = item.uiVersion;
+  const versionLabel = versionTag ? chalk.dim(` [${versionTag}]`) : '';
 
   console.log('');
-  console.log(`  ${badge} ${chalk.bold(item.title)} ${versionLabel}`);
+  console.log(`  ${badge} ${chalk.bold(item.title)}${versionLabel}`);
   console.log(`    ${chalk.gray(item.description)}`);
   if (item.actionRequired) {
     console.log(`    ${chalk.bold('Action:')} ${item.actionRequired}`);
@@ -186,11 +186,13 @@ function printJson(opts: ReportOptions): void {
   const output = {
     from: {
       alias: opts.fromVersion.ltsAlias,
+      version: opts.fromVersion.version,
       sdkLine: opts.fromVersion.stableLine,
       angularVersion: opts.fromVersion.angularVersion,
     },
     to: {
       alias: opts.toVersion.ltsAlias,
+      version: opts.toVersion.version,
       sdkLine: opts.toVersion.stableLine,
       angularVersion: opts.toVersion.angularVersion,
     },
@@ -215,7 +217,7 @@ function printMarkdown(opts: ReportOptions): void {
   lines.push('# Cumulocity Web SDK — Breaking Changes Report');
   lines.push('');
   lines.push(
-    `**Upgrade path:** \`${fromVersion.ltsAlias}\` (SDK ${fromVersion.stableLine}.x, Angular ${fromVersion.angularVersion}) → \`${toVersion.ltsAlias}\` (SDK ${toVersion.stableLine}.x, Angular ${toVersion.angularVersion})`,
+    `**Upgrade path:** ${versionLabel(fromVersion)} \u2192 ${versionLabel(toVersion)}`,
   );
   lines.push('');
 
@@ -244,7 +246,8 @@ function printMarkdown(opts: ReportOptions): void {
     for (const item of items) {
       lines.push(`### ${severityEmoji(item.severity)} ${item.title}`);
       lines.push('');
-      lines.push(`**Introduced in:** \`${item.introducedIn}\``);
+      const introLabel = item.uiVersion;
+      if (introLabel) lines.push(`**Introduced in:** \`${introLabel}\``);
       lines.push('');
       lines.push(item.description);
       lines.push('');
@@ -288,4 +291,21 @@ function severityEmoji(severity: BreakingChange['severity']): string {
     case 'INFO':
       return '🔵';
   }
+}
+
+/**
+ * Human-readable label for a resolved version.
+ * LTS version:     "2025-lts (SDK 1021.22.x, Angular 18)"
+ * Non-LTS version: "1021.0.4 (Angular 18)"
+ */
+function versionLabel(v: InputVersion): string {
+  const date = v.releaseDate ? ` · ${formatDate(v.releaseDate)}` : '';
+  return v.ltsAlias
+    ? `${v.ltsAlias} (SDK ${v.stableLine}.x, Angular ${v.angularVersion}${date})`
+    : `${v.version} (Angular ${v.angularVersion}${date})`;
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
