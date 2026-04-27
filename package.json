@@ -3,11 +3,17 @@
   "version": "0.0.4",
   "description": "CLI to detect and list breaking changes between Cumulocity Web SDK versions",
   "type": "module",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "c8y-breaking-changes": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsup",
+    "prepare": "tsup",
     "dev": "tsx src/index.ts",
     "check": "tsc --noEmit",
     "test": "node --import tsx/esm --test $(find src -name '*.test.ts')"
@@ -19,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   },
