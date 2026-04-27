@@ -118,13 +118,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install c8y-breaking-changes-cli
-        # Use a local path when this workflow lives inside the CLI repo itself;
-        # replace with the published package name once published to npm:
-        #   run: npm install -g c8y-breaking-changes-cli
-        run: npm install -g .
+        # Downloads and installs the latest release from GitHub.
+        # Replace the URL with a specific version tag when you need reproducible runs,
+        # e.g. https://github.com/Cumulocity-IoT/breaking-changes-cli/releases/download/v0.0.4/c8y-breaking-changes-cli-v0.0.4.tgz
+        run: |
+          LATEST_URL=$(curl -fsSL https://api.github.com/repos/Cumulocity-IoT/breaking-changes-cli/releases/latest \
+            | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); process.stdout.write(d.assets.find(a=>a.name.endsWith('.tgz'))?.browser_download_url??'')")
+          if [ -z "$LATEST_URL" ]; then echo 'ERROR: could not resolve release artifact URL'; exit 1; fi
+          curl -fsSL "$LATEST_URL" -o c8y-breaking-changes-cli.tgz
+          npm install -g ./c8y-breaking-changes-cli.tgz
 
       - name: Run breaking-changes check (JSON)
         id: run-check

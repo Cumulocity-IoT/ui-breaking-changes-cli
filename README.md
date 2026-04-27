@@ -15,15 +15,34 @@ All breaking change data is fetched at runtime by scraping the live Cumulocity d
 
 ## Installation
 
+### From a release artifact
+
+Download the `.tgz` from the [GitHub Releases](../../releases) page, then:
+
 ```bash
-# From source
+# Option A — install globally (recommended)
+pnpm install -g ./c8y-breaking-changes-cli-v*.*.*.tgz
+c8y-breaking-changes --from 2025-lts --to 2026-lts
+
+# Option B — run directly without installing
+tar -xzf c8y-breaking-changes-cli-v*.*.*.tgz
+node package/dist/index.js --from 2025-lts --to 2026-lts
+```
+
+### From source
+
+```bash
 pnpm install
 pnpm build
-npm install -g .
+pnpm install -g .
+c8y-breaking-changes --from 2025-lts --to 2026-lts
 
-# Or run directly without installing
+# Or run without installing
 pnpm dev --from 2025-lts --to 2026-lts
 ```
+
+> **Note:** The published tarball contains only `dist/index.js` (a self-contained bundle), `README.md`, and `LICENSE`.
+> `src/`, test files, and lock files are excluded.
 
 ---
 
