@@ -1,6 +1,6 @@
 # c8y-breaking-changes-cli
 
-CLI to detect and list breaking changes between [Cumulocity Web SDK](https://cumulocity.com/docs/) versions.
+The unofficial CLI to detect and list breaking changes between [Cumulocity Web SDK](https://cumulocity.com/docs/) versions.
 
 All breaking change data is fetched at runtime by scraping the live Cumulocity documentation pages and the npm registry — nothing is hardcoded.
 
@@ -242,3 +242,8 @@ Entries are attributed using **npm publish dates** rather than calendar year:
 4. Each included entry is attributed to the first LTS version whose npm release date is ≥ the entry's publish date — i.e. the LTS that first *ships* the change.
 
 This correctly captures CD-era changes. For example, a REST API change published in September 2025 (after 2025-lts was released in early 2025, but before 2026-lts in early 2026) is attributed to **2026-lts** and appears in a `--from 2025-lts --to 2026-lts` report.
+
+---
+
+This cli is provided as-is and without warranty or support. They do not constitute part of the Cumulocity product suite. Users are free to use, fork and modify them, subject to the license agreement. While Cumulocity welcomes contributions, we cannot guarantee to include every contribution in the master project.
+
