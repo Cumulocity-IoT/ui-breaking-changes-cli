@@ -20,13 +20,9 @@ All breaking change data is fetched at runtime by scraping the live Cumulocity d
 Download the `.tgz` from the [GitHub Releases](../../releases) page, then:
 
 ```bash
-# Option A — install globally (recommended)
-pnpm install -g ./c8y-breaking-changes-cli-v*.*.*.tgz
-c8y-breaking-changes --from 2025-lts --to 2026-lts
-
-# Option B — run directly without installing
+# run directly without installing
 tar -xzf c8y-breaking-changes-cli-v*.*.*.tgz
-node package/dist/index.js --from 2025-lts --to 2026-lts
+node index.js --from 2025-lts --to 2026-lts
 ```
 
 ### From source
@@ -35,7 +31,7 @@ node package/dist/index.js --from 2025-lts --to 2026-lts
 pnpm install
 pnpm build
 pnpm install -g .
-c8y-breaking-changes --from 2025-lts --to 2026-lts
+node index.js --from 2025-lts --to 2026-lts
 
 # Or run without installing
 pnpm dev --from 2025-lts --to 2026-lts
@@ -51,7 +47,7 @@ pnpm dev --from 2025-lts --to 2026-lts
 ### Check breaking changes
 
 ```bash
-c8y-breaking-changes --from <version> --to <version> [options]
+node index.js --from <version> --to <version> [options]
 ```
 
 | Option | Description |
@@ -69,7 +65,7 @@ c8y-breaking-changes --from <version> --to <version> [options]
 ### List known versions
 
 ```bash
-c8y-breaking-changes versions
+node index.js versions
 ```
 
 ---
@@ -90,34 +86,34 @@ c8y-breaking-changes versions
 
 ```bash
 # Pretty output (default)
-c8y-breaking-changes --from 2024-lts --to 2026-lts
+node index.js --from 2024-lts --to 2026-lts
 
 # JSON (suitable for CI scripts)
-c8y-breaking-changes --from 2025-lts --to 2026-lts --format json
+node index.js --from 2025-lts --to 2026-lts --format json
 
 # Markdown (suitable for GitHub Step Summary or PR comments)
-c8y-breaking-changes --from 2025-lts --to 2026-lts --format markdown
+node index.js --from 2025-lts --to 2026-lts --format markdown
 
 # Use the pinned version from your package.json as --from, latest CD as --to
-c8y-breaking-changes --from 1021.22.50 --to cd
+node index.js --from 1021.22.50 --to cd
 
 # Compare an older CD build (from a previous LTS line, ~3 weeks ago) to today's CD release.
 # Both versions are resolved to their LTS line: 1021.55.3 → 2025-lts, cd → 2026-lts.
-c8y-breaking-changes --from 1021.55.3 --to cd
+node index.js --from 1021.55.3 --to cd
 
 # If --from and --to are CD builds on the *same* LTS line (e.g. both 1023.x),
 # they resolve to the same LTS alias and the CLI reports "same version" —
 # there are no cross-line breaking changes between them.
-# c8y-breaking-changes --from 1023.68.0 --to cd  →  Error: same version
+# node index.js --from 1023.68.0 --to cd  →  Error: same version
 
 # Only show blocking issues, filtered to Angular changes
-c8y-breaking-changes --from 2024-lts --to 2026-lts --breaking-only --category angular
+node index.js --from 2024-lts --to 2026-lts --breaking-only --category angular
 
 # Skip npm lookup for faster offline-like runs
-c8y-breaking-changes --from 2025-lts --to 2026-lts --no-npm
+node index.js --from 2025-lts --to 2026-lts --no-npm
 
 # Show grep hints so you can locate affected symbols in your codebase
-c8y-breaking-changes --from 2025-lts --to 2026-lts --show-grep
+node index.js --from 2025-lts --to 2026-lts --show-grep
 ```
 
 ### --help-json
@@ -127,7 +123,7 @@ consumption by LLMs, agents, and CI tooling that need to understand the interfac
 without parsing human-readable text.
 
 ```bash
-c8y-breaking-changes --help-json | jq '.commands[0].options[].flags'
+node index.js --help-json | jq '.commands[0].options[].flags'
 ```
 
 ---
