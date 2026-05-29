@@ -158,14 +158,14 @@ pnpm dev           # run via tsx (no build step needed)
 pnpm check         # TypeScript type-check
 pnpm lint          # Biome lint
 pnpm test          # run unit tests
-pnpm build         # bundle to dist/ via tsup
+pnpm build         # bundle to dist/ via tsdown
 ```
 
 ### Project structure
 
 ```
 src/
-  index.ts                              # CLI entry point (Commander)
+  index.ts                              # CLI entry point (citty)
   index.test.ts                         # CLI integration tests (node:test)
   version-map.ts                        # SdkVersion type + resolveVersion / getVersionRange
   version-map.test.ts                   # Unit tests (node:test)

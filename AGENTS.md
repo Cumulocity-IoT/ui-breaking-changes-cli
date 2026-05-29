@@ -12,7 +12,7 @@ pnpm install          # install dependencies (pnpm ≥ 11 required)
 pnpm check            # TypeScript type-check (tsc --noEmit) — run after every change
 pnpm lint             # Biome lint — run after every change
 pnpm test             # unit tests (node:test + tsx loader)
-pnpm build            # compile + bundle src/ → dist/ via pkgroll
+pnpm build            # compile + bundle src/ → dist/ via tsdown
 pnpm dev -- <args>    # run from source via tsx (no build step)
 ```
 
@@ -29,7 +29,7 @@ The CLI is a single-binary TypeScript ESM project (Node.js ≥ 18).
 
 ```
 src/
-  index.ts                        # CLI entry — Commander, 3-phase async pipeline
+  index.ts                        # CLI entry — citty, 3-phase async pipeline
   index.test.ts                   # CLI integration tests (--help, --help-json)
   version-map.ts                  # Pure resolution logic, no I/O
   version-map.test.ts             # Unit tests for resolution logic
@@ -152,51 +152,36 @@ vocabulary regex (no specific attack-vector names). The pattern matches terms su
 
 ## Build tooling
 
-### Bundler — pkgroll (Rollup-based)
+### Bundler — tsdown (Rolldown-based)
 
-**`pkgroll`** bundles `src/index.ts` into a single self-contained `dist/index.js`.
-`chalk`, `commander`, and `zod` are bundled and live in `devDependencies` — the
+**`tsdown`** bundles `src/index.ts` into a single self-contained `dist/index.js`.
+`chalk`, `citty`, and `zod` are bundled and live in `devDependencies` — the
 published npm package has no runtime `dependencies`.
 
-**Why pkgroll and not tsup, Vite, or esbuild directly:**
+tsdown is configured via `tsdown.config.ts`:
 
-Commander 14 ships its ESM entry (`esm.mjs`) as a thin re-export wrapper over a
-CJS `index.js`. Inside that CJS module, `require('node:events')` is called inside
-a function body (not at the module top level). esbuild and Rolldown (Vite 8) both
-wrap CJS modules in factory functions when producing ESM output — the dynamic
-`require()` inside those factories cannot be resolved at runtime and crashes:
+```ts
+import { defineConfig } from 'tsdown';
+export default defineConfig({
+  entry: 'src/index.ts',
+  outDir: 'dist',
+  platform: 'node',
+  format: 'esm',
+  minify: true,
+  clean: true,
+  dts: false,
+  outputOptions: { entryFileNames: 'index.js' },
+});
 ```
-Error: Dynamic require of "events" is not supported
-```
-The standard workaround is a banner that injects a `createRequire` shim. This
-works with tsup but **breaks with Vite/Rolldown**: because this project's own
-`index.ts` also imports `createRequire` from `node:module` (for reading the
-package version), Rolldown deduplicates the two imports into one binding, then
-sees the banner's duplicate and throws `Identifier 'createRequire' has already
-been declared`.
 
-**pkgroll uses Rollup + `@rollup/plugin-commonjs`**, which converts CJS modules
-to ESM statically at bundle time — turning `require('node:events')` into a
-proper `import { EventEmitter } from 'node:events'`. No shims, no banners, no
-workarounds. This is the fundamental difference:
-
-| Bundler | Core engine | CJS→ESM | Commander 14 | Config |
-|---|---|---|---|---|
-| pkgroll | Rollup | ✅ static conversion | ✅ works | zero-config |
-| tsup | esbuild | ❌ factory wrap | ❌ needs banner | tsup.config.ts |
-| Vite | Rolldown (RC) | ❌ factory wrap | ❌ banner conflicts | vite.config.ts |
-
-pkgroll is zero-config: it reads the `bin` field from `package.json` to determine
-the entry point (`dist/index.js` → `src/index.ts`) and output format. Do not add
-a config file unless strictly necessary.
+tsdown uses **Rolldown** under the hood. Because `citty` is pure ESM (no CJS
+wrapping needed), none of the old Commander-era `createRequire` banner conflicts
+apply. The `createRequire` call that reads the package version from
+`package.json` at runtime is still present and works correctly with Rolldown — no
+shim is required.
 
 **`prepack`** (not `prepare`) triggers the build. `prepare` runs on every
 `pnpm install`; `prepack` only runs before `pnpm pack` / `npm publish`.
-
-**pkgroll peer dep warning:** pkgroll declares `typescript: '^4.1 || ^5.0'` as a
-peer dependency, which predates TypeScript 6. It works correctly with TS6 — the
-peer dep range is just stale. The false-positive warning is suppressed in
-`pnpm-workspace.yaml` via `peerDependencyRules.allowedVersions`.
 
 ### Type-checker — tsgo (`@typescript/native-preview`)
 
@@ -204,7 +189,7 @@ peer dep range is just stale. The false-positive warning is suppressed in
 available as `@typescript/native-preview`. It is ~6× faster than `tsc` on this
 project (≈0.1 s vs ≈0.5 s) and accepts the same CLI flags. It is still a dev
 preview: it supports `--noEmit` and `--watch` but does not yet emit code or run
-as a language server. Since the build uses pkgroll (not tsc) for emit, `tsgo` is
+as a language server. Since the build uses tsdown (not tsc) for emit, `tsgo` is
 the right tool for the check-only role. If `tsgo` is broken by a future dev
 build, fall back to `tsc --noEmit`.
 
@@ -216,7 +201,8 @@ build, fall back to `tsc --noEmit`.
   until Node resolves this natively.
 - **Test glob** — `pnpm test` passes `'src/**/*.test.ts'` as a quoted glob to
   Node's built-in test runner. Node expands it; the shell does not.
-- **Biome** (`biome.json`) is the linter. Run `pnpm lint` or `./node_modules/.bin/biome lint src/`.
+- **Biome** (`biome.json`) is the linter/formatter runner. Run `pnpm lint` or
+  `./node_modules/.bin/biome lint src/`.
   Formatter is disabled — Biome lint only. All `recommended` rules are enabled.
   Do not add `eslint` or `prettier`.
 - **TypeScript 6** requires `"types": ["node"]` in `tsconfig.json`; without it,

@@ -12,8 +12,8 @@
     "c8y-breaking-changes": "./dist/index.js"
   },
   "scripts": {
-    "build": "pkgroll --minify --clean-dist",
-    "prepack": "pkgroll --minify --clean-dist",
+    "build": "tsdown",
+    "prepack": "tsdown",
     "dev": "tsx src/index.ts",
     "check": "tsgo --noEmit",
     "lint": "biome lint src/",
@@ -24,8 +24,8 @@
     "@types/node": "^24.0.0",
     "@typescript/native-preview": "^7.0.0-dev.20260522.1",
     "chalk": "^5.6.2",
-    "commander": "^14.0.3",
-    "pkgroll": "^2.27.0",
+    "citty": "^0.2.2",
+    "tsdown": "^0.22.0",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
     "zod": "^4.4.3"
