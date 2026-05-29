@@ -45,6 +45,15 @@ describe('resolveVersion', () => {
     it('resolves "2026-lts"', () => {
       assert.equal(resolveVersion('2026-lts', VERSIONS), v2026);
     });
+    it('resolves "y2025-lts" (y-prefix with -lts suffix)', () => {
+      assert.equal(resolveVersion('y2025-lts', VERSIONS), v2025);
+    });
+    it('resolves "y2026-lts" (y-prefix with -lts suffix)', () => {
+      assert.equal(resolveVersion('y2026-lts', VERSIONS), v2026);
+    });
+    it('resolves "Y2025-LTS" (Y-prefix, uppercase)', () => {
+      assert.equal(resolveVersion('Y2025-LTS', VERSIONS), v2025);
+    });
     it('is case-insensitive', () => {
       assert.equal(resolveVersion('2025-LTS', VERSIONS), v2025);
     });

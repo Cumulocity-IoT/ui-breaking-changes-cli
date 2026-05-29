@@ -55,9 +55,9 @@ export interface SdkVersion {
  * Resolve a version alias string to an SdkVersion.
  *
  * Accepts:
- *  - LTS aliases:      "2025-lts", "2026-lts"
- *  - Year aliases:     "2025", "2026", "y2025"
- *  - Minor / stable:   "1021", "1023", "1021.22", "1021.22.145"
+ *  - LTS aliases:           "2025-lts", "2026-lts", "y2025-lts", "y2026-lts"
+ *  - Year aliases:          "2025", "2026", "y2025", "y2026"
+ *  - Minor / stable:        "1021", "1023", "1021.22", "1021.22.145"
  *
  * For full patch versions with a specified minor (X.Y.Z), the resolution
  * requires an exact minor match against the LTS stable line:
@@ -75,10 +75,13 @@ export function resolveVersion(alias: string, versions: SdkVersion[]): SdkVersio
 
   if (!normalized) return undefined;
 
+  // Check if normalized input already ends with -lts (e.g., "2026-lts", "y2026-lts" → "2026-lts")
+  // If so, check directly. Otherwise, check both the literal value and with -lts appended.
+  const endsWithLts = normalized.endsWith('-lts');
   const direct = versions.find(
     (v) =>
       v.ltsAlias === normalized ||
-      v.ltsAlias === `${normalized}-lts` ||
+      (!endsWithLts && v.ltsAlias === `${normalized}-lts`) ||
       v.yearAlias === normalized ||
       v.primaryVersion.startsWith(normalized) ||
       v.stableLine === normalized ||

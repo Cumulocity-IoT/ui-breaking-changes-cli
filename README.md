@@ -74,11 +74,13 @@ node index.js versions
 
 | Format | Examples |
 |---|---|
-| LTS alias | `2023-lts`, `2024-lts`, `2025-lts`, `2026-lts` |
-| Year alias | `2025`, `2026`, `y2025` |
+| LTS alias | `2023-lts`, `2024-lts`, `2025-lts`, `2026-lts`, `y2025-lts`, `y2026-lts` |
+| Year alias | `2025`, `2026`, `y2025`, `y2026` |
 | Minor / stable line | `1021`, `1023`, `1021.22` |
 | Full patch version | `1021.22.145`, `1023.13.2` |
 | CD release | `cd` — resolves to the current `latest` tag on npm |
+
+The `y`-prefix is accepted on both year aliases and LTS aliases (`y2026` and `y2026-lts` both resolve to the same version). Aliases are case-insensitive (`Y2026-LTS` works too).
 
 ---
 

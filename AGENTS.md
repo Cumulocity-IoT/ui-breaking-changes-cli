@@ -77,7 +77,7 @@ All such data must be fetched and parsed from the upstream sources above.
 
 | Input | Example | Resolved by |
 |---|---|---|
-| LTS alias | `2026-lts` | Exact `ltsAlias` match |
+| LTS alias | `2026-lts`, `y2026-lts` | Exact `ltsAlias` match (y-prefix stripped) |
 | Year alias | `2026`, `y2026` | `yearAlias` match after stripping `y` prefix |
 | Stable line | `1023.14`, `1021` | `stableLine.startsWith(normalized)` |
 | Full patch | `1023.13.2` | Major segment fallback (`"1023"` → `stableLine` prefix) |
