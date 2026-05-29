@@ -1,6 +1,6 @@
 {
   "name": "c8y-breaking-changes-cli",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "CLI to detect and list breaking changes between Cumulocity Web SDK versions",
   "type": "module",
   "files": [
