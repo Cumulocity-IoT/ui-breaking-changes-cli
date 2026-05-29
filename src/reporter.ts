@@ -111,7 +111,7 @@ function printPretty(opts: ReportOptions): void {
     if (items.length === 0) continue;
 
     console.log(chalk.bold(`  ${icon}  ${label}`));
-    console.log(chalk.dim('  ' + '─'.repeat(62)));
+    console.log(chalk.dim(`  ${'─'.repeat(62)}`));
 
     for (const item of items) {
       printChangeItem(item, opts);
@@ -122,7 +122,7 @@ function printPretty(opts: ReportOptions): void {
 
   // ── Reference links ────────────────────────────────────────────────────────
   console.log(chalk.bold('  📚  Reference Links'));
-  console.log(chalk.dim('  ' + '─'.repeat(62)));
+  console.log(chalk.dim(`  ${'─'.repeat(62)}`));
   console.log(`  ${chalk.underline('https://cumulocity.com/codex/migration-guides/updating-web-sdk-version/overview')}`);
   console.log(`  ${chalk.underline('https://cumulocity.com/docs/change-logs/?component=.component-rest-api&change-type=.change-type-api-change')}`);
 
@@ -139,42 +139,112 @@ function printPretty(opts: ReportOptions): void {
   const info = breakingChanges.filter((c) => c.severity === 'INFO').length;
 
   console.log(chalk.bold('  Summary'));
-  console.log(chalk.dim('  ' + '─'.repeat(62)));
+  console.log(chalk.dim(`  ${'─'.repeat(62)}`));
   console.log(`  ${chalk.red('●')} BREAKING : ${chalk.bold(breaking)}`);
   console.log(`  ${chalk.yellow('●')} NOTABLE  : ${chalk.bold(notable)}`);
   console.log(`  ${chalk.blue('●')} INFO     : ${chalk.bold(info)}`);
   console.log('');
 }
 
+// Visible character width of every severity badge (all padded to the same length).
+const BADGE_WIDTH = 10; // ' BREAKING ' / ' NOTABLE  ' / '  INFO    '
+
 function printChangeItem(item: BreakingChange, opts: ReportOptions): void {
-  const badge = severityBadge(item.severity);
-  const versionTag = item.uiVersion;
-  const versionLabel = versionTag ? chalk.dim(` [${versionTag}]`) : '';
+  // Clamp to 120 so the output stays readable on very wide terminals.
+  const tw = Math.min(process.stdout.columns ?? 100, 120);
+
+  // "  {badge} " = 2 + BADGE_WIDTH + 1 = 13 visible chars before the title.
+  const prefixLen           = 2 + BADGE_WIDTH + 1;
+  const titleContinueIndent = ' '.repeat(prefixLen);
+  const bodyIndent          = '    ';
+
+  const badge      = severityBadge(item.severity);
+  const versionTag = item.uiVersion ? chalk.dim(` [${item.uiVersion}]`) : '';
+
+  // ── Title — word-wrapped, continuation lines aligned under first word ───────
+  const titleLines = wordWrap(item.title, tw - prefixLen);
+  const titleOut = titleLines
+    .map((l, i) =>
+      i === 0
+        ? `  ${badge} ${chalk.bold(l)}`
+        : `${titleContinueIndent}${chalk.bold(l)}`,
+    )
+    .join('\n');
 
   console.log('');
-  console.log(`  ${badge} ${chalk.bold(item.title)}${versionLabel}`);
-  console.log(`    ${chalk.gray(item.description)}`);
+  console.log(`${titleOut}${versionTag}`);
+
+  // ── Description — normalised bullets, word-wrapped per paragraph ────────
+  if (item.description) {
+    const paras = normaliseDescription(item.description).split('\n');
+    for (const para of paras) {
+      if (!para.trim()) continue;
+      const isBullet = para.startsWith('• ');
+      // Bullet continuation lines indent by 2 extra spaces to sit under the text.
+      const contIndent = bodyIndent + (isBullet ? '  ' : '');
+      const wrapWidth  = tw - bodyIndent.length - (isBullet ? 2 : 0);
+      const lines      = wordWrap(isBullet ? para.slice(2) : para, wrapWidth);
+      lines.forEach((l, i) => {
+        const prefix = i === 0 ? `${bodyIndent}${isBullet ? '• ' : ''}` : contIndent;
+        console.log(chalk.dim(`${prefix}${l}`));
+      });
+    }
+  }
+
   if (item.actionRequired) {
-    console.log(`    ${chalk.bold('Action:')} ${item.actionRequired}`);
+    console.log(`${bodyIndent}${chalk.bold('Action:')} ${item.actionRequired}`);
   }
-
   if (opts.showGrepHints && item.grepHints?.length) {
-    console.log(`    ${chalk.dim('Grep for:')} ${item.grepHints.map((g) => chalk.cyan(g)).join('  ')}`);
+    console.log(
+      `${bodyIndent}${chalk.dim('Grep for:')} ${item.grepHints.map((g) => chalk.cyan(g)).join('  ')}`,
+    );
   }
-
   if (item.sourceUrl) {
-    console.log(`    ${chalk.dim('→')} ${chalk.underline(item.sourceUrl)}`);
+    console.log(`${bodyIndent}${chalk.dim('→')} ${chalk.underline(item.sourceUrl)}`);
   }
+}
+
+/** Split text into lines of at most `maxWidth` chars, breaking on word boundaries. */
+function wordWrap(text: string, maxWidth: number): string[] {
+  const safe  = Math.max(maxWidth, 20);
+  const words = text.trim().replace(/\s+/g, ' ').split(' ');
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    if (line && line.length + 1 + word.length > safe) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+/**
+ * Normalise a scraped changelog description for terminal rendering:
+ *  - Convert inline ` * text` list markers to `\n• text` (one bullet per line)
+ *  - Strip code-fence language tags (``` ts, etc.)
+ *  - Collapse surplus inline whitespace
+ */
+function normaliseDescription(text: string): string {
+  return text
+    .replace(/```[a-z]*/gi, '')          // strip code-fence lang annotations
+    .replace(/(?<=\S)\s+\*\s+/g, '\n• ') // mid-text " * " → newline + bullet
+    .replace(/^\*\s+/gm, '• ')           // line-leading "* " → bullet
+    .replace(/[ \t]{2,}/g, ' ')          // collapse inline spaces (preserve newlines)
+    .trim();
 }
 
 function severityBadge(severity: BreakingChange['severity']): string {
   switch (severity) {
     case 'BREAKING':
-      return chalk.bgRed.white(' BREAKING ');
+      return chalk.bgRed.white.bold(' BREAKING ');
     case 'NOTABLE':
-      return chalk.bgYellow.black(' NOTABLE  ');
+      return chalk.bgYellow.black.bold(' NOTABLE  ');
     case 'INFO':
-      return chalk.bgBlue.white('  INFO    ');
+      return chalk.bgBlue.white.bold('  INFO    ');
   }
 }
 
@@ -230,10 +300,11 @@ function printMarkdown(opts: ReportOptions): void {
   lines.push('');
 
   const categories: { key: Category; label: string }[] = [
-    { key: 'angular', label: 'Angular Upgrade Requirements' },
+    { key: 'angular',   label: 'Angular Upgrade Requirements' },
     { key: 'websdk-ui', label: 'WebSDK UI Breaking Changes' },
-    { key: 'rest-api', label: 'REST API / @c8y/client Changes' },
-    { key: 'security', label: 'Security Fixes' },
+    { key: 'rest-api',  label: 'REST API / @c8y/client Changes' },
+    { key: 'security',  label: 'Security Fixes' },
+    { key: 'migration', label: 'Migration Steps' },
   ];
 
   for (const { key, label } of categories) {

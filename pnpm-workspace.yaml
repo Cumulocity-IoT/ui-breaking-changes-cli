@@ -1,0 +1,18 @@
+# Minimum age in minutes before a new version is added to the catalog (7 days)
+minimumReleaseAge: 10080
+
+# pkgroll's peerDependencies range predates TypeScript 6 but it works correctly.
+# Suppress the false-positive warning.
+peerDependencyRules:
+  allowedVersions:
+    pkgroll>typescript: '6'
+
+blockExoticSubdeps: true
+
+# Allow building specific packages that are not yet published to the registry, It needs to be clarified why this is required.
+allowBuilds:
+  core-js: false
+  esbuild: false
+  lmdb: false
+  msgpackr-extract: false
+  nice-napi: false

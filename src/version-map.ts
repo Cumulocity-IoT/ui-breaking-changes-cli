@@ -8,6 +8,8 @@
  * See src/npm-fetcher.ts for how versions are populated.
  */
 
+import { isVersionSegmentPrefix } from './utils.js';
+
 /**
  * A resolved version from npm — may or may not correspond to an LTS stable line.
  *
@@ -83,9 +85,9 @@ export function resolveVersion(alias: string, versions: SdkVersion[]): SdkVersio
       v.ltsAlias === normalized ||
       (!endsWithLts && v.ltsAlias === `${normalized}-lts`) ||
       v.yearAlias === normalized ||
-      v.primaryVersion.startsWith(normalized) ||
+      v.primaryVersion === normalized ||
       v.stableLine === normalized ||
-      v.stableLine.startsWith(normalized),
+      isVersionSegmentPrefix(normalized, v.stableLine),
   );
   if (direct) return direct;
 
@@ -156,7 +158,7 @@ export function getVersionRange(
     const toLts = to.ltsAlias ? versions.find((v) => v.ltsAlias === to.ltsAlias) : null;
     const toDateStr = (toLts?.releaseDate) || to.releaseDate;
     const toDate = new Date(toDateStr).getTime();
-    if (isNaN(fromDate) || isNaN(toDate) || fromDate >= toDate) return [];
+    if (Number.isNaN(fromDate) || Number.isNaN(toDate) || fromDate >= toDate) return [];
     return versions
       .filter((v) => {
         if (!v.releaseDate) return false;

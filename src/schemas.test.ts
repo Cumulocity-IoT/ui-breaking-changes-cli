@@ -81,7 +81,7 @@ describe('NpmPackageManifestSchema', () => {
       'dist-tags': { latest: '1023.14.145' },
     });
     assert.ok(result.success);
-    assert.equal(result.data['dist-tags']['latest'], '1023.14.145');
+    assert.equal(result.data['dist-tags'].latest, '1023.14.145');
   });
 
   it('accepts a manifest with multiple dist-tags and versions', () => {
@@ -141,7 +141,7 @@ describe('NpmPackageManifestSchema', () => {
       license: 'Apache-2.0',
     });
     assert.ok(result.success);
-    assert.equal(result.data['dist-tags']['latest'], '1023.14.145');
+    assert.equal(result.data['dist-tags'].latest, '1023.14.145');
   });
 
   it('rejects a manifest missing dist-tags', () => {
@@ -172,7 +172,7 @@ describe('NpmDistTagsSchema', () => {
       'dist-tags': { latest: '1023.14.145' },
     });
     assert.ok(result.success);
-    assert.equal(result.data['dist-tags']?.['latest'], '1023.14.145');
+    assert.equal(result.data['dist-tags']?.latest, '1023.14.145');
   });
 
   it('accepts a response without dist-tags (field is optional)', () => {

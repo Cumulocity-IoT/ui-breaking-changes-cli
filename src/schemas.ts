@@ -90,7 +90,7 @@ export const C8yChangelogEntrySchema = z.object({
   /** Section anchor id, e.g. "ui-c8y-1021-0-0-dashboard-manager-as-separate-plugin" */
   id: z.string(),
   /** ISO-ish date string from data-date attribute, e.g. "2025-03-31 12:00:00 +0000 UTC" */
-  date: z.string(),
+  date: z.string().min(1, 'date must not be empty — entry has no data-date and no preceding <h5> header'),
   /** Change type class extracted from section classes, e.g. "api-change" or "announcement" */
   changeType: z.string().min(1),
   /** Component slug extracted from section classes, e.g. "rest-api" or "web-sdk" */

@@ -8,8 +8,8 @@ All breaking change data is fetched at runtime by scraping the live Cumulocity d
 
 ## Requirements
 
-- Node.js ≥ 18
-- pnpm ≥ 9
+- Node.js ≥ 22
+- pnpm ≥ 11
 
 ---
 
@@ -58,7 +58,6 @@ node index.js --from <version> --to <version> [options]
 | `--breaking-only` | Show only `BREAKING` severity items; suppress NOTABLE and INFO |
 | `--category <cat>` | Filter to one category: `angular`, `websdk-ui`, `rest-api`, `security`, `migration` |
 | `--show-grep` | Print grep search patterns to locate affected symbols in your codebase |
-| `--no-npm` | Skip the npm registry lookup; omits latest patch version info |
 | `--no-color` | Disable ANSI colour codes (useful when piping output) |
 | `--help-json` | Output the full CLI schema as JSON for programmatic or LLM use, then exit |
 
@@ -111,9 +110,6 @@ node index.js --from 1021.55.3 --to cd
 # Only show blocking issues, filtered to Angular changes
 node index.js --from 2024-lts --to 2026-lts --breaking-only --category angular
 
-# Skip npm lookup for faster offline-like runs
-node index.js --from 2025-lts --to 2026-lts --no-npm
-
 # Show grep hints so you can locate affected symbols in your codebase
 node index.js --from 2025-lts --to 2026-lts --show-grep
 ```
@@ -160,8 +156,9 @@ Copy it to your WebSDK plugin or application repository. It:
 pnpm install       # install dependencies
 pnpm dev           # run via tsx (no build step needed)
 pnpm check         # TypeScript type-check
+pnpm lint          # Biome lint
 pnpm test          # run unit tests
-pnpm build         # compile to dist/
+pnpm build         # bundle to dist/ via tsup
 ```
 
 ### Project structure
@@ -173,9 +170,11 @@ src/
   version-map.ts                        # SdkVersion type + resolveVersion / getVersionRange
   version-map.test.ts                   # Unit tests (node:test)
   npm-fetcher.ts                        # npm registry fetch (latest patch versions, CD release, Angular version)
+  npm-fetcher.test.ts                   # Unit tests for npm-fetcher
   schemas.ts                            # Zod schemas for all external API / HTML responses
   schemas.test.ts                       # Unit tests for schemas
   reporter.ts                           # Output formatting (pretty / json / markdown)
+  utils.ts                              # Shared utilities (compareSemver)
   data/
     breaking-changes.ts                 # Type definitions only (no hardcoded data)
   fetchers/
@@ -226,8 +225,8 @@ Each entry is classified by severity and category:
 
 | Category | Detection rule |
 |---|---|
-| `angular` | Title or body matches `angular N`, `ng update`, `standalone` flag, or `zoneless` — **and** title contains "angular" or "upgrade" |
-| `security` | Title/body mentions "security", "XSS", "CSS injection", or "vulnerability" |
+| `angular` | Title or body matches `angular N`, `ng update`, `standalone` flag, or `zoneless` |
+| `security` | Title/body matches general security vocabulary: `security`, `vulnerabilit`, `exploit`, `inject`, `attack`, `patch`, `fix`, `threat`, `breach`, `exposure`, `privilege`, `authori`, `authenticat`, `sanitiz`, `encrypt`, `malicious` |
 | `websdk-ui` | Everything else |
 
 Severity mapping:

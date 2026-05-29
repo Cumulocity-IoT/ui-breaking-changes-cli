@@ -1,6 +1,6 @@
 {
   "name": "c8y-breaking-changes-cli",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "CLI to detect and list breaking changes between Cumulocity Web SDK versions",
   "type": "module",
   "files": [
@@ -12,26 +12,27 @@
     "c8y-breaking-changes": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsup",
-    "prepare": "tsup",
+    "build": "pkgroll --minify --clean-dist",
+    "prepack": "pkgroll --minify --clean-dist",
     "dev": "tsx src/index.ts",
-    "check": "tsc --noEmit",
-    "test": "node --import tsx/esm --test $(find src -name '*.test.ts')"
-  },
-  "dependencies": {
-    "chalk": "^5.3.0",
-    "commander": "^12.1.0",
-    "zod": "^4.3.6"
+    "check": "tsgo --noEmit",
+    "lint": "biome lint src/",
+    "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsup": "^8.5.1",
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "@biomejs/biome": "^2.4.15",
+    "@types/node": "^24.0.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260522.1",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "pkgroll": "^2.27.0",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "zod": "^4.4.3"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "pnpm": ">=9.0.0"
+    "node": ">=22.0.0",
+    "pnpm": ">=11.0.0"
   },
-  "packageManager": "pnpm@9.15.0"
+  "packageManager": "pnpm@11.4.0"
 }

@@ -5,23 +5,26 @@
  *
  * Data sources:
  *  - Version map: npm dist-tags on @c8y/ngx-components (y????-lts tags)
- *  - WebSDK changes: https://cumulocity.com/docs/{year}/change-logs/
- *  - REST API changes: https://cumulocity.com/docs/change-logs/
+ *  - Changelogs: https://cumulocity.com/docs/change-logs/ (WebSDK and REST API — single global page)
  *  - Angular changes: https://api.github.com/repos/angular/angular/releases
  *
  * Usage:
  *   c8y-breaking-changes --from 2024-lts --to 2026-lts
  *   c8y-breaking-changes --from 2025 --to 2026 --format markdown
- *   c8y-breaking-changes --from 1021 --to 1023 --no-npm --show-grep
+ *   c8y-breaking-changes --from 1021 --to 1023 --show-grep
  */
 
 import { Command, Option } from 'commander';
-import { writeSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
+const { version: PKG_VERSION } = createRequire(import.meta.url)('../package.json') as { version: string };
+
 import { getVersionRange } from './version-map.js';
 import { fetchChangelogs } from './fetchers/c8y-changelog-fetcher.js';
 import { fetchAngularBreakingChanges } from './fetchers/angular-changelog-fetcher.js';
-import { fetchNpmDerivedData, fetchLatestCdVersion, resolveArbitraryVersion, type NpmVersionInfo } from './npm-fetcher.js';
+import { fetchNpmDerivedData, resolveArbitraryVersion, type NpmVersionInfo } from './npm-fetcher.js';
 import { printReport } from './reporter.js';
+import { compareSemver } from './utils.js';
 import type { SdkVersion } from './version-map.js';
 
 // ── LLM / agent schema (emitted by --help-json) ───────────────────────────────
@@ -29,7 +32,7 @@ import type { SdkVersion } from './version-map.js';
 const VERSION_ALIAS_FORMATS = [
   { format: 'LTS alias',           pattern: '<year>-lts',               examples: ['2025-lts', '2026-lts'] },
   { format: 'Year alias',          pattern: '<year> or y<year>',        examples: ['2025', 'y2026'] },
-  { format: 'Minor / stable line', pattern: '<major> or <major>.<min>', examples: ['1021', '1021.22'] },
+  { format: 'Stable line',         pattern: '<major>.<min>',           examples: ['1021.22', '1023.14'], note: 'Must be an exact LTS stable-line match. Bare majors (e.g. "1021") require the @oldest/@latest qualifier.' },
   { format: 'Full patch version',  pattern: '<major>.<min>.<patch>',    examples: ['1021.22.145', '1023.13.2'] },
   { format: 'Range selector',      pattern: '<prefix>@oldest|<prefix>@latest', examples: ['1021@oldest', '1021@latest', '1021.22@latest'], note: 'Picks the first or last published patch within the given major (or major.minor) prefix. Required for partial version inputs.' },
   { format: 'CD release',          pattern: 'cd',                       examples: ['cd'], note: 'Resolves to the current latest dist-tag on npm (@c8y/ngx-components)' },
@@ -37,15 +40,14 @@ const VERSION_ALIAS_FORMATS = [
 
 const CLI_SCHEMA = {
   name: 'c8y-breaking-changes',
-  version: '1.0.0',
+  version: PKG_VERSION,
   description:
     'Detect and list Cumulocity Web SDK breaking changes between two version lines. ' +
     'Version map from npm dist-tags; change data scraped live from cumulocity.com.',
   dataSources: [
-    'https://registry.npmjs.org/@c8y/ngx-components (version map)',
-    'https://cumulocity.com/docs/{year}/change-logs/ (WebSDK changes)',
-    'https://cumulocity.com/docs/change-logs/ (REST API changes)',
-    'https://api.github.com/repos/angular/angular/releases (Angular changes)',
+    'https://registry.npmjs.org/@c8y/ngx-components (version map, release dates, Angular peer deps)',
+    'https://cumulocity.com/docs/change-logs/ (WebSDK and REST API changes — single global page)',
+    'https://api.github.com/repos/angular/angular/releases (Angular release notes, fetched per major version crossed)',
   ],
   versionAliasFormats: VERSION_ALIAS_FORMATS,
   commands: [
@@ -62,7 +64,6 @@ const CLI_SCHEMA = {
         { flags: '--breaking-only',      required: false, description: 'Show only BREAKING severity changes; suppress NOTABLE and INFO.' },
         { flags: '--category <cat>',     required: false, choices: ['angular', 'websdk-ui', 'rest-api', 'security', 'migration'], description: 'Filter output to a single change category.' },
         { flags: '--show-grep',          required: false, description: 'Print grep search patterns for each change to locate affected symbols in your codebase.' },
-        { flags: '--no-npm',             required: false, description: 'Skip the npm registry lookup. Omits latest patch version info from the report.' },
         { flags: '--no-color',           required: false, description: 'Disable ANSI colour codes. Useful when piping output or running in a non-TTY environment.' },
         { flags: '--help-json',          required: false, hidden: true, description: 'Output the full CLI schema as JSON for programmatic or LLM use, then exit.' },
       ],
@@ -90,7 +91,7 @@ program
   .description(
     'Detect and list breaking changes between Cumulocity Web SDK versions.\n\n' +
       'Version map: npm dist-tags on @c8y/ngx-components (y????-lts tags)\n' +
-      'Changes: cumulocity.com/docs/{year}/change-logs/ and /docs/change-logs/\n\n' +
+      'Changes: cumulocity.com/docs/change-logs/ (WebSDK and REST API)\n\n' +
       'Version alias formats:\n' +
       '  2025-lts          LTS alias\n' +
       '  2025, y2025       Year alias (y-prefix optional)\n' +
@@ -102,23 +103,13 @@ program
       '  cd                Latest npm dist-tag (@c8y/ngx-components)\n\n' +
       'Tip: run with --help-json to get the full machine-readable CLI schema.',
   )
-  .version('1.0.0');
+  .version(PKG_VERSION);
 
 // Handle --help-json before Commander parses — avoids unknown-option errors on subcommands.
 if (process.argv.includes('--help-json')) {
-  // writeSync in a loop with EAGAIN retry: spawnSync sets the child's stdout fd
-  // to non-blocking, so write() returns EAGAIN when the 8 KiB pipe buffer fills.
-  // Catching and retrying drains the pipe as the parent reads from the other end.
-  const buf = Buffer.from(JSON.stringify(CLI_SCHEMA, null, 2) + '\n', 'utf8');
-  let offset = 0;
-  while (offset < buf.length) {
-    try {
-      offset += writeSync(process.stdout.fd, buf, offset, buf.length - offset);
-    } catch (e: unknown) {
-      if ((e as NodeJS.ErrnoException).code !== 'EAGAIN') throw e;
-      // pipe buffer full — spin until the parent drains it
-    }
-  }
+  // console.log goes through Node’s stream layer which handles non-blocking fds
+  // and EAGAIN retries internally — no busy-spin required.
+  console.log(JSON.stringify(CLI_SCHEMA, null, 2));
   process.exit(0);
 }
 
@@ -158,7 +149,6 @@ program
     'Narrow output to one change category: angular | websdk-ui | rest-api | security | migration.',
   )
   .option('--show-grep', 'Print grep search patterns alongside each change to help locate affected symbols in your codebase.')
-  .option('--no-npm', 'Skip the npm registry lookup. The report will omit latest patch version information.')
   .option('--no-color', 'Disable ANSI colour codes. Useful when piping output or running in a non-TTY environment.')
   .addHelpText(
     'after',
@@ -184,7 +174,7 @@ LTS version resolution:
   Exact versions (1021.22.50) and closest-match fallbacks are unaffected.`,
   )
   .action(async (opts) => {
-    const { from: fromAlias, to: toAlias, format, npm: doNpm, showGrep, color, breakingOnly, category } = opts;
+    const { from: fromAlias, to: toAlias, format, showGrep, color, breakingOnly, category } = opts;
 
     const isCd = (s: string) => s.trim().toLowerCase() === 'cd';
     const needsCd = isCd(fromAlias) || isCd(toAlias);
@@ -203,16 +193,14 @@ LTS version resolution:
     let cdVersion: string | null = null;
 
     try {
-      const [npmData, resolvedCd] = await Promise.all([
-        doNpm !== false ? fetchNpmDerivedData() : Promise.resolve(null),
-        needsCd ? fetchLatestCdVersion() : Promise.resolve(null),
-      ]);
-      if (npmData) {
-        versions = npmData.versions;
-        npmInfo = npmData.npmInfo;
-        manifest = npmData.manifest;
+      const npmData = await fetchNpmDerivedData();
+      versions = npmData.versions;
+      manifest = npmData.manifest;
+      npmInfo = npmData.npmInfo;
+      // Extract CD version from the already-fetched dist-tags — no second request needed.
+      if (needsCd) {
+        cdVersion = npmData.npmInfo.distTags.latest ?? null;
       }
-      cdVersion = resolvedCd;
     } catch (err) {
       process.stderr.write(' failed\n');
       console.error(`\n${err instanceof Error ? err.message : err}\n`);
@@ -268,7 +256,7 @@ LTS version resolution:
 
     // ── Validate version ordering ────────────────────────────────────────────
     // Primary check: semver of the resolved version strings must be strictly ascending.
-    if (semverCompare(toVersion.version, fromVersion.version) <= 0) {
+    if (compareSemver(toVersion.version, fromVersion.version) <= 0) {
       console.error(
         `\nError: --to "${resolvedToAlias}" (${toVersion.version}) is not newer than --from "${resolvedFromAlias}" (${fromVersion.version}).\n` +
           `  Swap --from and --to.\n`,
@@ -316,14 +304,7 @@ LTS version resolution:
     process.stderr.write(' done\n');
 
     // ── Merge and filter ─────────────────────────────────────────────────────
-    let breakingChanges = [...changelogChanges];
-
-    const angularChanges = angularChangesRaw.filter((c) => {
-      if (breakingOnly && c.severity !== 'BREAKING') return false;
-      if (category && c.category !== category) return false;
-      return true;
-    });
-    breakingChanges = [...breakingChanges, ...angularChanges];
+    let breakingChanges = changelogChanges.concat(angularChangesRaw);
 
     if (breakingOnly) {
       breakingChanges = breakingChanges.filter((c) => c.severity === 'BREAKING');
@@ -380,29 +361,24 @@ program
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function semverCompare(a: string, b: string): number {
-  const parse = (v: string) => v.replace(/[^0-9.]/g, '').split('.').map(Number);
-  const pa = parse(a);
-  const pb = parse(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
 function printKnownVersions(versions: SdkVersion[]): void {
+  const aliasW = Math.max('Alias'.length,    ...versions.map((v) => v.ltsAlias.length));
+  const lineW  = Math.max('SDK line'.length, ...versions.map((v) => v.stableLine.length));
+  const angW   = Math.max('Angular'.length,  ...versions.map((v) => `Angular ${v.angularVersion}`.length));
+
   console.log('\nKnown SDK version aliases:\n');
-  console.log('  Alias          SDK line    Angular   Status');
-  console.log('  ' + '─'.repeat(58));
-  for (const v of [...versions].reverse()) {
+  console.log(
+    `  ${['Alias'.padEnd(aliasW), 'SDK line'.padEnd(lineW), 'Angular'.padEnd(angW), 'Status'].join('  ')}`,
+  );
+  console.log(`  ${'─'.repeat(aliasW + lineW + angW + 16)}`);
+  for (const v of versions.concat().reverse()) {
     const row = [
-      v.ltsAlias.padEnd(15),
-      v.stableLine.padEnd(12),
-      `Angular ${v.angularVersion}`.padEnd(10),
+      v.ltsAlias.padEnd(aliasW),
+      v.stableLine.padEnd(lineW),
+      `Angular ${v.angularVersion}`.padEnd(angW),
       v.supportStatus,
     ].join('  ');
-    console.log('  ' + row);
+    console.log(`  ${row}`);
   }
   console.log('');
 }

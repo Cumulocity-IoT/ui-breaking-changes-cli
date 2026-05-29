@@ -7,7 +7,7 @@ on:
 
 jobs:
   check-and-test:
-    name: Type-check & unit tests
+    name: Type-check, lint & unit tests
     runs-on: ubuntu-latest
 
     steps:
@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: pnpm
 
       - name: Install dependencies
@@ -25,6 +25,9 @@ jobs:
 
       - name: Type-check
         run: pnpm check
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Unit tests
         run: pnpm test

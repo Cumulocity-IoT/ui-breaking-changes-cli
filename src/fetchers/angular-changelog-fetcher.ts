@@ -35,13 +35,11 @@ export async function fetchAngularBreakingChanges(
 
   const bodies = await Promise.all(majors.map(fetchAngularRelease));
 
-  const results: BreakingChange[] = [];
-  for (let i = 0; i < majors.length; i++) {
+  return majors.reduce<BreakingChange[]>((results, major, i) => {
     const body = bodies[i];
-    if (!body) continue;
-    results.push(...parseAngularReleaseBody(body, majors[i], introducedIn));
-  }
-  return results;
+    if (!body) return results;
+    return results.concat(parseAngularReleaseBody(body, major, introducedIn));
+  }, []);
 }
 
 // ─── HTTP ─────────────────────────────────────────────────────────────────────
@@ -153,7 +151,7 @@ function collectBullets(text: string): string[] {
       if (current.trim()) bullets.push(normalise(current));
       current = line.slice(2);
     } else if (current && (line.startsWith('  ') || line.startsWith('\t') || line === '')) {
-      current += ' ' + line.trim();
+      current += ` ${line.trim()}`;
     } else {
       // Non-indented, non-bullet line ends the current item
       if (current.trim()) bullets.push(normalise(current));
