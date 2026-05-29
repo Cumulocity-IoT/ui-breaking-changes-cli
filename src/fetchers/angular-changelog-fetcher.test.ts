@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   fetchAngularBreakingChanges,
   parseAngularReleaseBody,
-} from './angular-changelog-fetcher.js';
+} from './angular-changelog-fetcher.ts';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 //

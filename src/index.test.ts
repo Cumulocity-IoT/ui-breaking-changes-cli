@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const entry = join(__dirname, 'index.ts');
-const loader = '--import=tsx/esm';
+const loader = '--experimental-strip-types';
 
 function runCli(args: string[]): { stdout: string; stderr: string; status: number | null } {
   const result = spawnSync(process.execPath, [loader, entry, ...args], {

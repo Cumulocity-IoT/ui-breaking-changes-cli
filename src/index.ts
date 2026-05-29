@@ -19,13 +19,13 @@ import { createRequire } from 'node:module';
 
 const { version: PKG_VERSION } = createRequire(import.meta.url)('../package.json') as { version: string };
 
-import { getVersionRange } from './version-map.js';
-import { fetchChangelogs } from './fetchers/c8y-changelog-fetcher.js';
-import { fetchAngularBreakingChanges } from './fetchers/angular-changelog-fetcher.js';
-import { fetchNpmDerivedData, resolveArbitraryVersion, type NpmVersionInfo } from './npm-fetcher.js';
-import { printReport } from './reporter.js';
-import { compareSemver } from './utils.js';
-import type { SdkVersion } from './version-map.js';
+import { getVersionRange } from './version-map.ts';
+import { fetchChangelogs } from './fetchers/c8y-changelog-fetcher.ts';
+import { fetchAngularBreakingChanges } from './fetchers/angular-changelog-fetcher.ts';
+import { fetchNpmDerivedData, resolveArbitraryVersion, type NpmVersionInfo } from './npm-fetcher.ts';
+import { printReport } from './reporter.ts';
+import { compareSemver } from './utils.ts';
+import type { SdkVersion } from './version-map.ts';
 
 // ── LLM / agent schema (emitted by --help-json) ───────────────────────────────
 
