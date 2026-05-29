@@ -93,7 +93,7 @@ describe('check --help', () => {
 
   it('output includes all key options', () => {
     const { stdout } = runCli(['check', '--help']);
-    for (const flag of ['--from', '--to', '--format', '--breaking-only', '--category', '--show-grep', '--no-npm', '--no-color']) {
+    for (const flag of ['--from', '--to', '--format', '--breaking-only', '--category', '--show-grep', '--no-color']) {
       assert.ok(stdout.includes(flag), `${flag} not found in check --help`);
     }
   });
@@ -178,7 +178,7 @@ describe('--help-json: check command option completeness', () => {
     flags = (check.options ?? []).map((o) => o.flags);
   });
 
-  for (const expected of ['--format', '--breaking-only', '--category', '--show-grep', '--no-npm', '--no-color']) {
+  for (const expected of ['--format', '--breaking-only', '--category', '--show-grep', '--no-color']) {
     it(`schema includes ${expected}`, () => {
       assert.ok(flags.some((f) => f.includes(expected)), `${expected} not found in check options: ${JSON.stringify(flags)}`);
     });
@@ -188,7 +188,8 @@ describe('--help-json: check command option completeness', () => {
     const schema = JSON.parse(runCli(['--help-json']).stdout) as {
       commands: Array<{ name: string; options?: Array<{ flags: string; choices?: string[] }> }>;
     };
-    const check = schema.commands.find((c) => c.name === 'check')!;
+    const check = schema.commands.find((c) => c.name === 'check');
+    assert.ok(check, '"check" command not found in --help-json schema');
     const formatOpt = (check.options ?? []).find((o) => o.flags.includes('--format'));
     assert.ok(formatOpt, '--format option not found');
     assert.ok(formatOpt.choices?.includes('pretty'),   '"pretty" not in --format choices');

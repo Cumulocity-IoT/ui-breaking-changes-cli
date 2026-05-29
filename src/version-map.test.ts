@@ -33,7 +33,7 @@ const VERSIONS: SdkVersion[] = [
   makeVersion('2026-lts', '2026', '1023.14', '1023.14.0', 20, '2026-01-15T00:00:00.000Z'),
 ];
 
-const [v2023, v2024, v2025, v2026] = VERSIONS;
+const [v2023, v2024, v2025, v2026] = VERSIONS as [SdkVersion, SdkVersion, SdkVersion, SdkVersion];
 
 // ── resolveVersion ────────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ describe('resolveVersion', () => {
     it('resolves exact stable line "1021.22"', () => {
       assert.equal(resolveVersion('1021.22', VERSIONS), v2025);
     });
-    it('resolves major-only "1021" via stableLine.startsWith', () => {
+    it('resolves major-only "1021" via segment-prefix match', () => {
       assert.equal(resolveVersion('1021', VERSIONS), v2025);
     });
     it('resolves major-only "1018" (single-segment stableLine)', () => {
@@ -87,10 +87,10 @@ describe('resolveVersion', () => {
   });
 
   describe('full patch versions', () => {
-    it('resolves "1021.22.145" via stableLine.startsWith direct match', () => {
+    it('resolves "1021.22.145" via minor-segment fallback', () => {
       assert.equal(resolveVersion('1021.22.145', VERSIONS), v2025);
     });
-    it('resolves "1023.14.0" via primaryVersion.startsWith direct match', () => {
+    it('resolves "1023.14.0" via exact primaryVersion match', () => {
       assert.equal(resolveVersion('1023.14.0', VERSIONS), v2026);
     });
     it('does NOT resolve "1021.55.3" — CD build, minor 55 ≠ stableLine minor 22', () => {
@@ -378,31 +378,31 @@ describe('getVersionRange — date boundary conditions', () => {
     // from.releaseDate == v2024.releaseDate → d > fromDate is false → v2024 excluded
     const fromExactlyAt2024: InputVersion = {
       version: '1019.0.0',
-      releaseDate: v2024!.releaseDate,
+      releaseDate: v2024?.releaseDate,
       angularVersion: 17,
       ltsAlias: null,
       stableLine: '1019.0',
     };
     const range = getVersionRange(fromExactlyAt2024, v2026, VERSIONS);
-    assert.ok(!range.includes(v2024!), 'v2024 must be excluded (from date equals its release date)');
-    assert.ok(range.includes(v2025!));
-    assert.ok(range.includes(v2026!));
+    assert.ok(!range.includes(v2024), 'v2024 must be excluded (from date equals its release date)');
+    assert.ok(range.includes(v2025));
+    assert.ok(range.includes(v2026));
   });
 
   it('includes an LTS version published 1 ms after from', () => {
     const justBefore2024: InputVersion = {
       version: '1019.0.0',
-      releaseDate: new Date(new Date(v2024!.releaseDate).getTime() - 1).toISOString(),
+      releaseDate: new Date(new Date(v2024?.releaseDate).getTime() - 1).toISOString(),
       angularVersion: 17,
       ltsAlias: null,
       stableLine: '1019.0',
     };
     const range = getVersionRange(justBefore2024, v2026, VERSIONS);
-    assert.ok(range.includes(v2024!));
+    assert.ok(range.includes(v2024));
   });
 
   it('returns [] when versions list is empty', () => {
-    const range = getVersionRange(v2023!, v2026!, []);
+    const range = getVersionRange(v2023, v2026, []);
     assert.deepEqual(range, []);
   });
 });
@@ -422,9 +422,17 @@ describe('resolveVersion — additional edge cases', () => {
     assert.equal(resolveVersion('1019.0', VERSIONS), v2024);
   });
 
-  it('resolves "1021.2" via stableLine.startsWith ("1021.22".startsWith("1021.2"))', () => {
-    // Intentional: the CLI docs list stableLine.startsWith as a resolution strategy.
-    assert.equal(resolveVersion('1021.2', VERSIONS), v2025);
+  it('does NOT resolve "1021.2" — segment 2 ≠ segment 22', () => {
+    assert.equal(resolveVersion('1021.2', VERSIONS), undefined);
+  });
+
+  it('does NOT resolve "1021.1" — segment 1 ≠ segment 22', () => {
+    assert.equal(resolveVersion('1021.1', VERSIONS), undefined);
+  });
+
+  it('does NOT resolve "1021.1" against stableLine "1021.13" — segment 1 ≠ segment 13', () => {
+    const withLine13 = [...VERSIONS, makeVersion('2027-lts', '2027', '1021.13', '1021.13.0', 22)];
+    assert.equal(resolveVersion('1021.1', withLine13), undefined);
   });
 
   it('returns undefined for empty versions list', () => {

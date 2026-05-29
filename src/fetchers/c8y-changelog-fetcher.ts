@@ -13,6 +13,7 @@
 import { C8yChangelogEntrySchema, ChangelogHtmlSchema, type C8yChangelogEntry } from '../schemas.js';
 import type { BreakingChange, Category, Severity } from '../data/breaking-changes.js';
 import type { InputVersion, SdkVersion } from '../version-map.js';
+import { compareSemver } from '../utils.js';
 export type { C8yChangelogEntry };
 
 const BASE_DOCS_URL = 'https://cumulocity.com/docs';
@@ -132,7 +133,7 @@ export function parseChangelogHtml(
     const h5Match = body.match(/<h5[^>]*>([^<]+)<\/h5>/);
     if (h5Match) {
       const parsed = new Date(h5Match[1].trim());
-      if (!isNaN(parsed.getTime())) lastH5Date = parsed.toISOString();
+      if (!Number.isNaN(parsed.getTime())) lastH5Date = parsed.toISOString();
     }
 
     // Only process change-log sections
@@ -216,55 +217,66 @@ function extractFirstClassTag(classes: string, prefix: string): string | null {
 }
 
 function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#43;/g, '+').trim();
+  return html
+    .replace(/<[^>]+>/g, ' ')     // strip all tags
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lsquo;/g, '\u2018')
+    .replace(/&rsquo;/g, '\u2019')
+    .replace(/&ldquo;/g, '\u201c')
+    .replace(/&rdquo;/g, '\u201d')
+    .replace(/&ndash;/g, '\u2013')
+    .replace(/&mdash;/g, '\u2014')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#43;/g, '+')
+    .replace(/\s+/g, ' ')         // collapse whitespace
+    .trim();
 }
 
 // ─── Orchestration ────────────────────────────────────────────────────────────
 
 /**
- * Fetch all breaking changes for the given traversal years from the live
- * Cumulocity documentation pages.
+ * Fetch all breaking changes from the live Cumulocity documentation page.
  *
- * Two sources in parallel:
+ * Both WebSDK and REST API changes come from the single global changelog page
+ * (`docs/change-logs/`). Sections are filtered by component CSS class:
+ * `component-web-sdk` for WebSDK entries, `component-rest-api` for REST API.
+ * Date-based filtering (entry.date vs fromVersion/toVersion release dates)
+ * determines which changes fall within the requested upgrade range.
  *
- *  - **WebSDK**: one request per year to the year-specific page
- *    (`docs/{year}/change-logs/`), filtered to `web-sdk` component.
- *    Entries are attributed by year (each year maps to one LTS alias).
- *
- *  - **REST API**: a single request to the global aggregated page
- *    (`docs/change-logs/`), filtered to `rest-api` component.
- *    Entries are attributed by publish date: each entry is assigned to the
- *    first LTS version whose npm release date is ≥ the entry's publish date.
- *    Only entries whose dates fall strictly after `fromVersion.releaseDate`
- *    and up to and including `toVersion.releaseDate` are returned.
- *
- * @param traversedYears  Calendar years in the upgrade range (e.g. [2026])
- * @param fromVersion     The version being upgraded FROM (used for REST API date boundary)
- * @param toVersion       The version being upgraded TO (used for REST API date boundary)
- * @param versions        Full known version list, used to map dates to LTS aliases
+ * @param fromVersion  The version being upgraded FROM (used for date boundary filtering)
+ * @param toVersion    The version being upgraded TO (used for date boundary filtering)
+ * @param versions     Full known version list, used to map entry dates to LTS aliases
  */
 export async function fetchChangelogs(
   fromVersion: InputVersion,
   toVersion: InputVersion,
   versions: SdkVersion[],
 ): Promise<BreakingChange[]> {
-  // Both WebSDK and REST API changes come from the single global changelog page.
-  // Date-based filtering (entry.date vs fromVersion/toVersion release dates)
-  // is applied uniformly — no year-specific URLs needed.
   const [webSdkEntries, restApiEntries] = await Promise.all([
     fetchC8yChangelogGlobal(['announcement', 'api-change'], ['web-sdk']),
     fetchC8yChangelogGlobal(['api-change'], ['rest-api']),
   ]);
 
+  // Pre-sort once so dateToLtsAlias doesn't repeat the sort for every entry.
+  const sortedVersions = versions.concat()
+    .filter((v) => v.releaseDate)
+    .sort((a, b) => new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime());
+
   const changes: BreakingChange[] = [];
 
   for (const entry of webSdkEntries) {
-    const change = convertEntry(entry, fromVersion, toVersion, versions, classifyWebSdkSeverity, classifyWebSdkCategory);
+    const change = convertEntry(entry, fromVersion, toVersion, sortedVersions, classifyWebSdkSeverity, classifyWebSdkCategory);
     if (change) changes.push(change);
   }
 
   for (const entry of restApiEntries) {
-    const change = convertEntry(entry, fromVersion, toVersion, versions, classifyRestApiSeverity, () => 'rest-api');
+    const change = convertEntry(entry, fromVersion, toVersion, sortedVersions, classifyRestApiSeverity, () => 'rest-api');
     if (change) {
       const { introducedIn: _unused, ...rest } = change;
       changes.push(rest);
@@ -304,8 +316,8 @@ function convertEntry(
       // Exact version: include only when strictly after fromVersion and at most toVersion
       // (mirrors the date filter semantics: strictly after from, on or before to).
       if (
-        compareSemverLocal(entry.uiVersion, fromVersion.version) <= 0 ||
-        compareSemverLocal(entry.uiVersion, toVersion.version) > 0
+        compareSemver(entry.uiVersion, fromVersion.version) <= 0 ||
+        compareSemver(entry.uiVersion, toVersion.version) > 0
       ) {
         return null;
       }
@@ -335,19 +347,16 @@ function classifyWebSdkSeverity(entry: C8yChangelogEntry): Severity {
 }
 
 function classifyWebSdkCategory(title: string, body: string): Category {
-  const text = (title + ' ' + body).toLowerCase();
-  if (/security|xss|css injection|vulnerabilit/.test(text)) return 'security';
-  if (
-    /\bangular \d+\b|\bng update\b|\bstandalone.{1,20}flag\b|\bzoneless\b/.test(text) &&
-    /upgrade|angular/i.test(title)
-  ) {
+  const text = (`${title} ${body}`).toLowerCase();
+  if (/security|vulnerabilit|exploit|inject|attack|threat|breach|exposure|privilege|authori|authenticat|sanitiz|encrypt|malicious/.test(text)) return 'security';
+  if (/\bangular \d+\b|\bng update\b|\bstandalone.{1,20}flag\b|\bzoneless\b/.test(text)) {
     return 'angular';
   }
   return 'websdk-ui';
 }
 
 function classifyRestApiSeverity(entry: C8yChangelogEntry): Severity {
-  const text = (entry.title + ' ' + entry.description).toLowerCase();
+  const text = (`${entry.title} ${entry.description}`).toLowerCase();
   if (entry.title.toLowerCase().startsWith('planned:')) return 'INFO';
   if (/\bnow includes?\b|\bbecomes case.insensitive\b/.test(text)) return 'NOTABLE';
   return 'BREAKING';
@@ -362,17 +371,14 @@ function classifyRestApiSeverity(entry: C8yChangelogEntry): Severity {
  * SMALLEST value that is still ≥ D.  In other words: the first LTS that shipped
  * AFTER the entry was published, so that upgrading to it exposes the change.
  *
- * Versions without a populated releaseDate are excluded from the search.
+ * @param sortedVersions Versions pre-sorted by releaseDate ascending, with
+ *   empty-releaseDate entries already filtered out. Callers must sort once and
+ *   reuse — this function does not sort internally.
  */
-function dateToLtsAlias(entryDate: string, versions: SdkVersion[]): string | null {
+function dateToLtsAlias(entryDate: string, sortedVersions: SdkVersion[]): string | null {
   const d = new Date(entryDate).getTime();
-  if (isNaN(d)) return null;
-
-  const sorted = versions
-    .filter((v) => v.releaseDate)
-    .sort((a, b) => new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime());
-
-  return sorted.find((v) => new Date(v.releaseDate).getTime() >= d)?.ltsAlias ?? null;
+  if (Number.isNaN(d)) return null;
+  return sortedVersions.find((v) => new Date(v.releaseDate).getTime() >= d)?.ltsAlias ?? null;
 }
 
 /**
@@ -391,20 +397,7 @@ function isInDateRange(
   const d    = new Date(entryDate).getTime();
   const from = new Date(fromVersion.releaseDate).getTime();
   const to   = new Date(toVersion.releaseDate).getTime();
-  return !isNaN(d) && d > from && d <= to;
+  return !Number.isNaN(d) && d > from && d <= to;
 }
 
-/**
- * Compare two semver-like strings (e.g. "1021.0.0" vs "1022.8.3").
- * Returns positive if a > b, negative if a < b, 0 if equal.
- */
-function compareSemverLocal(a: string, b: string): number {
-  const parse = (v: string) => v.split('.').map(Number);
-  const pa = parse(a);
-  const pb = parse(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
+

@@ -10,6 +10,7 @@
 
 import type { SdkVersion, InputVersion } from './version-map.js';
 import { resolveVersion } from './version-map.js';
+import { compareSemver, isVersionSegmentPrefix } from './utils.js';
 
 export interface NpmVersionInfo {
   /** The package name */
@@ -49,7 +50,7 @@ export function extractAngularMajorFromRange(range: string): number | null {
   return major >= 2 ? major : null; // Angular 2+ only
 }
 
-import { NpmDistTagsSchema, NpmPackageManifestSchema } from './schemas.js';
+import { NpmPackageManifestSchema } from './schemas.js';
 
 const NPM_REGISTRY = 'https://registry.npmjs.org';
 const PRIMARY_PACKAGE = '@c8y/ngx-components';
@@ -96,7 +97,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
   }
 
   const distTags = data['dist-tags'] ?? {};
-  const latest = distTags['latest'] ?? null;
+  const latest = distTags.latest ?? null;
 
   // ── Build version map from y????-lts dist-tags ─────────────────────────────
   // Tags are like `y2026-lts` → `1023.14.50`. From that version we derive the
@@ -141,7 +142,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
     } else {
       // Find the earliest published version matching this stable line
       const entry = Object.entries(timeMap)
-        .filter(([ver]) => /^\d/.test(ver) && ver.startsWith(v.stableLine + '.'))
+        .filter(([ver]) => /^\d/.test(ver) && ver.startsWith(`${v.stableLine}.`))
         .sort(([, a], [, b]) => a.localeCompare(b))  // ISO dates sort lexicographically
         [0];
       v.releaseDate = entry?.[1] ?? '';
@@ -161,7 +162,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
   // Seed from dist-tags
   for (const version of Object.values(distTags)) {
     for (const line of stableLines) {
-      if (version.startsWith(line + '.') || version.startsWith(line)) {
+      if (version.startsWith(`${line}.`) || version.startsWith(line)) {
         const existing = npmInfo.ltsPatchVersions[line];
         if (!existing || compareSemver(version, existing) > 0) {
           npmInfo.ltsPatchVersions[line] = version;
@@ -174,7 +175,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
   if (data.versions) {
     for (const version of Object.keys(data.versions)) {
       for (const line of stableLines) {
-        if (version.startsWith(line + '.') || version === line) {
+        if (version.startsWith(`${line}.`) || version === line) {
           const existing = npmInfo.ltsPatchVersions[line];
           if (!existing || compareSemver(version, existing) > 0) {
             npmInfo.ltsPatchVersions[line] = version;
@@ -203,27 +204,7 @@ export async function fetchNpmDerivedData(): Promise<NpmDerivedData> {
   return { versions, npmInfo, manifest: data };
 }
 
-/**
- * Fetch only the latest CD (continuous delivery) release version from npm.
- *
- * Used when --from or --to is the alias "cd". Returns the `latest` dist-tag
- * version (e.g. "1023.14.5"), or `null` when the registry is unreachable.
- */
-export async function fetchLatestCdVersion(): Promise<string | null> {
-  try {
-    const url = `${NPM_REGISTRY}/${encodeURIComponent(PRIMARY_PACKAGE)}`;
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) return null;
-    const parsed = NpmDistTagsSchema.safeParse(await res.json());
-    if (!parsed.success) return null;
-    return parsed.data['dist-tags']?.['latest'] ?? null;
-  } catch {
-    return null;
-  }
-}
+
 
 /**
  * Resolve any version alias or exact npm version string to an `InputVersion`
@@ -259,7 +240,7 @@ export function resolveArbitraryVersion(
     const [, prefix, qualifier] = atMatch;
     const timeMap     = manifest.time ?? {};
     const versionsMap = manifest.versions ?? {};
-    const dotPrefix   = prefix + '.';
+    const dotPrefix   = `${prefix}.`;
     const patches = Object.keys(timeMap)
       .filter((ver) => ver.startsWith(dotPrefix) && /^\d+\.\d+\.\d+$/.test(ver))
       .sort((a, b) => compareSemver(a, b));
@@ -295,8 +276,7 @@ export function resolveArbitraryVersion(
       lts.ltsAlias   === `${n}-lts` ||
       lts.yearAlias  === n ||
       lts.stableLine === n ||
-      (n.includes('.') && lts.stableLine.startsWith(n)) ||
-      (n.includes('.') && lts.primaryVersion.startsWith(n));
+      (n.includes('.') && isVersionSegmentPrefix(n, lts.stableLine));
     if (isNamedMatch) {
       return {
         version:        lts.primaryVersion,
@@ -343,7 +323,7 @@ export function resolveArbitraryVersion(
   const candidates = Object.keys(timeMap)
     .filter((ver) => ver.startsWith(prefix) && /^\d+\.\d+\.\d+$/.test(ver))
     .map((ver) => ({ ver, patch: parseInt(ver.split('.')[2], 10) }))
-    .filter((c) => !isNaN(c.patch));
+    .filter((c) => !Number.isNaN(c.patch));
 
   if (candidates.length === 0) return undefined;
 
@@ -358,6 +338,11 @@ export function resolveArbitraryVersion(
  * "1023.14.50" → "1023.14"  (major.minor, when minor != 0)
  * "1018.0.5"   → "1018"     (major only, when minor is 0)
  *
+ * The minor-0 convention: early CD builds ship as x.0.y before the LTS minor
+ * is assigned (e.g. 1018.0.5 before 2023-lts settled on stableLine "1018").
+ * Using a single-segment stableLine lets `resolveVersion` match them via the
+ * major-only fallback rather than accidentally colliding with a future LTS minor.
+ *
  * Future LTS lines may initially ship as x.0.y until their minor stabilises,
  * so this derivation is always done live from the current dist-tag value.
  */
@@ -369,24 +354,5 @@ function deriveStableLine(version: string): string {
   return parts[0];
 }
 
-/**
- * Compare two semver strings.
- * Returns positive if a > b, negative if a < b, 0 if equal.
- */
-function compareSemver(a: string, b: string): number {
-  const parse = (v: string) =>
-    v
-      .replace(/[^0-9.]/g, '')
-      .split('.')
-      .map(Number);
 
-  const pa = parse(a);
-  const pb = parse(b);
-
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
 
