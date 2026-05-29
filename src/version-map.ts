@@ -8,7 +8,7 @@
  * See src/npm-fetcher.ts for how versions are populated.
  */
 
-import { isVersionSegmentPrefix } from './utils.js';
+import { isVersionSegmentPrefix } from './utils.ts';
 
 /**
  * A resolved version from npm — may or may not correspond to an LTS stable line.

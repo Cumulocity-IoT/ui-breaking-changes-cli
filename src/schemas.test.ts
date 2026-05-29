@@ -4,7 +4,7 @@ import {
   GitHubReleaseSchema,
   NpmPackageManifestSchema,
   NpmDistTagsSchema,
-} from './schemas.js';
+} from './schemas.ts';
 
 // ─── GitHubReleaseSchema ──────────────────────────────────────────────────────
 

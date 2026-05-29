@@ -10,10 +10,10 @@
  * rather than silently producing bad data.
  */
 
-import { C8yChangelogEntrySchema, ChangelogHtmlSchema, type C8yChangelogEntry } from '../schemas.js';
-import type { BreakingChange, Category, Severity } from '../data/breaking-changes.js';
-import type { InputVersion, SdkVersion } from '../version-map.js';
-import { compareSemver } from '../utils.js';
+import { C8yChangelogEntrySchema, ChangelogHtmlSchema, type C8yChangelogEntry } from '../schemas.ts';
+import type { BreakingChange, Category, Severity } from '../data/breaking-changes.ts';
+import type { InputVersion, SdkVersion } from '../version-map.ts';
+import { compareSemver } from '../utils.ts';
 export type { C8yChangelogEntry };
 
 const BASE_DOCS_URL = 'https://cumulocity.com/docs';

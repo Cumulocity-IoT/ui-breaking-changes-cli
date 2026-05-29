@@ -5,9 +5,9 @@
  */
 
 import chalk from 'chalk';
-import type { InputVersion, SdkVersion } from './version-map.js';
-import type { BreakingChange, Category } from './data/breaking-changes.js';
-import type { NpmVersionInfo } from './npm-fetcher.js';
+import type { InputVersion, SdkVersion } from './version-map.ts';
+import type { BreakingChange, Category } from './data/breaking-changes.ts';
+import type { NpmVersionInfo } from './npm-fetcher.ts';
 
 // ---------------------------------------------------------------------------
 // Public API

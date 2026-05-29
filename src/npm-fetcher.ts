@@ -8,9 +8,9 @@
  * Uses the public npm registry API — no auth required.
  */
 
-import type { SdkVersion, InputVersion } from './version-map.js';
-import { resolveVersion } from './version-map.js';
-import { compareSemver, isVersionSegmentPrefix } from './utils.js';
+import type { SdkVersion, InputVersion } from './version-map.ts';
+import { resolveVersion } from './version-map.ts';
+import { compareSemver, isVersionSegmentPrefix } from './utils.ts';
 
 export interface NpmVersionInfo {
   /** The package name */
@@ -50,7 +50,7 @@ export function extractAngularMajorFromRange(range: string): number | null {
   return major >= 2 ? major : null; // Angular 2+ only
 }
 
-import { NpmPackageManifestSchema } from './schemas.js';
+import { NpmPackageManifestSchema } from './schemas.ts';
 
 const NPM_REGISTRY = 'https://registry.npmjs.org';
 const PRIMARY_PACKAGE = '@c8y/ngx-components';

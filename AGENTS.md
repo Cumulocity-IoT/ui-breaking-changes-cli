@@ -195,10 +195,10 @@ build, fall back to `tsc --noEmit`.
 
 ### Other tools
 
-- **`tsx`** is required as the dev/test TypeScript runner. Node.js native
-  `--experimental-strip-types` does not remap `.js` imports to `.ts` files, which
-  this project relies on (NodeNext module resolution convention). Do not remove `tsx`
-  until Node resolves this natively.
+- **Node.js native type stripping** (`--experimental-strip-types`) is used for dev
+  and tests. All relative imports use `.ts` extensions (not `.js`). TypeScript
+  accepts this via `allowImportingTsExtensions: true`; `rewriteRelativeImportExtensions:
+  true` rewrites them to `.js` on emit via tsdown/Rolldown. `tsx` has been removed.
 - **Test glob** — `pnpm test` passes `'src/**/*.test.ts'` as a quoted glob to
   Node's built-in test runner. Node expands it; the shell does not.
 - **Biome** (`biome.json`) is the linter/formatter runner. Run `pnpm lint` or

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseChangelogHtml } from './c8y-changelog-fetcher.js';
+import { parseChangelogHtml } from './c8y-changelog-fetcher.ts';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 // Minimal but structurally faithful HTML fragments based on the actual
@@ -329,7 +329,7 @@ describe('parseChangelogHtml — year-specific REST API entry (regression)', () 
 
 describe('fetchC8yChangelog — live network', { timeout: 30_000 }, () => {
   it('fetches 2025 changelog and returns at least one api-change or announcement for rest-api / web-sdk', async () => {
-    const { fetchC8yChangelog } = await import('./c8y-changelog-fetcher.js');
+    const { fetchC8yChangelog } = await import('./c8y-changelog-fetcher.ts');
     const results = await fetchC8yChangelog(2025, ['api-change', 'announcement'], ['rest-api', 'web-sdk']);
 
     assert.ok(results.length > 0, `expected > 0 entries, got ${results.length}`);
@@ -346,7 +346,7 @@ describe('fetchC8yChangelog — live network', { timeout: 30_000 }, () => {
   // Regression test: verifies the live 2026 year-specific page can be fetched.
   // fetchChangelogs now uses only the global page; this tests fetchC8yChangelog directly.
   it('fetches 2026 year-specific changelog and returns rest-api api-change entries', async () => {
-    const { fetchC8yChangelog } = await import('./c8y-changelog-fetcher.js');
+    const { fetchC8yChangelog } = await import('./c8y-changelog-fetcher.ts');
     const results = await fetchC8yChangelog(2026, ['api-change'], ['rest-api']);
 
     assert.ok(results.length > 0, `expected > 0 rest-api api-change entries for 2026, got ${results.length}`);

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveVersion, getVersionRange } from './version-map.js';
-import type { InputVersion, SdkVersion } from './version-map.js';
+import { resolveVersion, getVersionRange } from './version-map.ts';
+import type { InputVersion, SdkVersion } from './version-map.ts';
 
 // ── Fixture ───────────────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveArbitraryVersion } from './npm-fetcher.js';
-import type { SdkVersion } from './version-map.js';
+import { resolveArbitraryVersion } from './npm-fetcher.ts';
+import type { SdkVersion } from './version-map.ts';
 
 // ── Fixture ───────────────────────────────────────────────────────────────────
 

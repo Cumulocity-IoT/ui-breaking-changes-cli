@@ -9,8 +9,8 @@
  * Network failures are graceful — missing releases return an empty array.
  */
 
-import type { BreakingChange } from '../data/breaking-changes.js';
-import { GitHubReleaseSchema } from '../schemas.js';
+import type { BreakingChange } from '../data/breaking-changes.ts';
+import { GitHubReleaseSchema } from '../schemas.ts';
 
 const GITHUB_RELEASES_API = 'https://api.github.com/repos/angular/angular/releases/tags';
 
